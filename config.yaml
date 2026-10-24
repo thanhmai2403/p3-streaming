@@ -1,0 +1,53 @@
+# P3 – config.yaml: nguồn duy nhất của mọi tham số (README mục 4).
+# Muốn đổi: sửa file này trong một commit riêng, nhắn người kia TRƯỚC khi đổi code.
+# Code không được hard-code các giá trị ở đây; đọc qua common/config.py.
+
+# === Thuật toán phát hiện (README mục 4 & 6) ===
+window: 24                 # cửa sổ rolling z-score (số mẫu)
+z_threshold: 3.0            # ngưỡng |z| cho z-score
+ewma_lambda: 0.3            # lambda EWMA
+ewma_L: 3.0                 # ngưỡng EWMA: |x - m| > L * sqrt(v)
+warmup: 24                  # warm-up mỗi key: chỉ cập nhật state, không phát alert
+eps: 1.0e-9                 # ngưỡng std/phương sai để tránh chia 0
+tolerance_ms: 7200000       # ngưỡng trễ 2 giờ event-time (mục 6.3)
+probe_mod: 100              # phát probe khi seq % 100 == 0
+
+# === Engine (README mục 4) ===
+parallelism: 4              # Flink: 2 TM x 2 slot ; Spark: shuffle.partitions = 4
+checkpoint_interval_s: 10   # chu kỳ checkpoint (Flink; Spark dùng trigger mặc định)
+state_backend: rocksdb      # cả hai engine
+
+# === Kafka (README mục 3) ===
+kafka:
+  docker_brokers: "kafka:9092"      # trong mạng docker
+  host_brokers: "localhost:29092"   # từ máy host
+  topic_in: "sensor"                # 6 partition, RF = 1
+  topic_out: "alerts"               # 6 partition, RF = 1
+  partitions: 6
+  replication_factor: 1
+  consumer_group: "flink-job"       # Flink; Spark KHÔNG commit offset (lưu trong checkpoint)
+  # Cấu hình producer dùng chung (README mục 8)
+  producer:
+    linger_ms: 5
+    batch_size: 65536
+    acks: 1
+    compression_type: none
+
+# === Tài nguyên mỗi engine (README mục 4): tổng 4 core + 8 GB, mỗi lần chỉ bật một engine ===
+resources:
+  spark:
+    workers: 2
+    worker_cores: 2
+    worker_memory_gb: 4
+
+# === Đường dẫn ===
+checkpoint_root: "/checkpoints"     # /checkpoints/spark/<run_id> và /checkpoints/flink/<run_id>
+results_raw: "results/raw"          # results/raw/<run_id>/
+results_summary: "results/summary"  # rq1.csv, rq2.csv, rq3.csv
+
+# === Thí nghiệm (README mục 10.1) ===
+experiment:
+  warmup_s: 30             # bỏ 30 giây đầu
+  measure_s: 180           # đo 180 giây
+  producer_duration_s: 210 # warm-up + đo (rate mode)
+  wait_job_running_s: 180  # thời gian chờ tối đa job RUNNING

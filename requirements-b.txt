@@ -1,0 +1,16 @@
+boto3==1.43.118
+botocore==1.43.118
+confluent-kafka==2.16.0
+jmespath==1.1.0
+narwhals==2.27.1
+numpy==2.4.6
+pandas==3.1.0
+pyarrow==26.0.0
+python-dateutil==2.9.0.post0
+PyYAML==6.0.3
+river==0.26.1
+s3transfer==0.19.3
+scipy==1.17.1
+six==1.17.0
+tzdata==2026.5
+urllib3==2.8.0

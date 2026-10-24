@@ -1,0 +1,8 @@
+.venv/
+data/raw/
+data/processed/*.parquet
+checkpoints/
+*.log
+smoke_result.txt
+__pycache__/
+out_smoke/

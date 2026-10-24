@@ -1,0 +1,24 @@
+{
+  "rows_raw": 455512,
+  "rows_pm25": 97118,
+  "dropped_null": 0,
+  "dropped_negative": 57,
+  "dropped_duplicate_timestamp": 0,
+  "rows_clean": 97061,
+  "resample": "1 sample/hour: floor to hour + mean",
+  "rows_hourly": 19568,
+  "per_station": {
+    "hn_01": 3439,
+    "hn_02": 8055,
+    "hn_03": 8074
+  },
+  "median_gap_minutes": {
+    "hn_01": 60.0,
+    "hn_02": 60.0,
+    "hn_03": 60.0
+  },
+  "period": [
+    "2025-10-23",
+    "2026-10-22"
+  ]
+}
