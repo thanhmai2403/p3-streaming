@@ -1,0 +1,116 @@
+{
+  "run_id": "rq1_flink_try5000_r3",
+  "rq": "rq1",
+  "engine": "flink",
+  "cfg": "try5000",
+  "rep": 3,
+  "git": {
+    "commit": "a75af82c53985c82cb25128f020d41c5796643a2",
+    "dirty": true
+  },
+  "config": {
+    "version": 1,
+    "kafka": {
+      "bootstrap_internal": "kafka:9092",
+      "bootstrap_host": "localhost:29092",
+      "topic_in": "sensor",
+      "topic_out": "alerts",
+      "partitions": 6,
+      "replication_factor": 1,
+      "starting_offsets": "earliest",
+      "producer": {
+        "linger.ms": 5,
+        "batch.size": 65536,
+        "acks": "1",
+        "compression.type": "none"
+      }
+    },
+    "detector": {
+      "key": [
+        "station_id",
+        "param"
+      ],
+      "warmup": 24,
+      "zscore": {
+        "window": 24,
+        "threshold": 3.0,
+        "min_std": 1e-09
+      },
+      "ewma": {
+        "lambda": 0.3,
+        "L": 3.0,
+        "min_var": 1e-09
+      }
+    },
+    "late": {
+      "tolerance_ms": 7200000
+    },
+    "probe": {
+      "every": 100
+    },
+    "engine": {
+      "parallelism": 4,
+      "checkpoint_interval_ms": 10000,
+      "state_backend": "rocksdb"
+    },
+    "flink": {
+      "consumer_group": "flink-job",
+      "python_execution_mode": "thread",
+      "assign_timestamps": false,
+      "watermark_ms": 10000,
+      "delivery_guarantee": "AT_LEAST_ONCE",
+      "transactional_id_prefix": "p3-flink",
+      "transaction_timeout_ms": 600000,
+      "checkpoint_dir": "file:///checkpoints/flink"
+    },
+    "spark": {
+      "shuffle_partitions": 4,
+      "checkpoint_dir": "/checkpoints/spark"
+    },
+    "producer": {
+      "seed": 42,
+      "synthetic": {
+        "n_stations": 1000,
+        "prefix": "syn_",
+        "param": "pm25",
+        "start_value": 50.0
+      }
+    },
+    "measure": {
+      "warmup_s": 30,
+      "duration_s": 180,
+      "sustain_p99_ms": 1000,
+      "sustain_drift_ratio": 1.5,
+      "drift_window_s": 30,
+      "recovery_window_s": 5,
+      "recovery_factor": 2.0,
+      "recovery_baseline_s": 30
+    },
+    "sota": {
+      "calib_fraction": 0.2,
+      "threshold_quantile": 0.99,
+      "mp": {
+        "m": 24,
+        "normalize": true,
+        "refractory": 24
+      }
+    }
+  },
+  "measure_args": {
+    "cmd": "collect",
+    "run_id": "rq1_flink_try5000_r3",
+    "bootstrap": "localhost:29092",
+    "max_seconds": null,
+    "idle_timeout": 20.0,
+    "read_committed": true,
+    "docker_stats": true,
+    "kill_ts_ms": null,
+    "no_summary": false,
+    "force": false
+  },
+  "measure_start_ms": 1792865989757,
+  "measure_end_ms": 1792866111962,
+  "n_probe": 3000,
+  "n_alert": 16610,
+  "n_bad": 0
+}

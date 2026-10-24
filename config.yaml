@@ -41,7 +41,9 @@ engine:
 
 flink:
   consumer_group: flink-job
-  watermark_ms: 10000                  # chỉ để engine chạy bình thường, KHÔNG dùng timer event-time
+  python_execution_mode: thread        # thread (pemja, chạy Python trong JVM) nhanh ~2x so với process
+  assign_timestamps: false             # job không dùng timer event-time -> bỏ bước gán timestamp (Python) cho nhanh
+  watermark_ms: 10000                  # chỉ dùng khi assign_timestamps: true
   delivery_guarantee: AT_LEAST_ONCE    # RQ3 chạy thêm EXACTLY_ONCE
   transactional_id_prefix: p3-flink
   transaction_timeout_ms: 600000       # phải <= transaction.max.timeout.ms của broker (mặc định 15 phút)
@@ -51,6 +53,28 @@ spark:
   shuffle_partitions: 4
   checkpoint_dir: "/checkpoints/spark"
 
+producer:
+  seed: 42
+  synthetic:                           # dữ liệu tổng hợp cho RQ1/RQ3 (README 7.3)
+    n_stations: 1000
+    prefix: "syn_"
+    param: pm25
+    start_value: 50.0
+
 measure:
   warmup_s: 30
   duration_s: 180
+  sustain_p99_ms: 1000                 # thông lượng bền vững: p99 < 1000 ms
+  sustain_drift_ratio: 1.5             # và trung vị 30 s cuối <= 1.5 x trung vị 30 s đầu
+  drift_window_s: 30
+  recovery_window_s: 5                 # RQ3: cửa sổ 5 s
+  recovery_factor: 2.0                 # RQ3: p99 về dưới 2 x p99 trước khi kill
+  recovery_baseline_s: 30              # p99 "trước khi kill" tính trên 30 s ngay trước kill
+
+sota:
+  calib_fraction: 0.2                  # ngưỡng = phân vị 99% điểm số trên 20% dữ liệu đầu (không dùng nhãn)
+  threshold_quantile: 0.99
+  mp:
+    m: 24
+    normalize: true                    # z-normalized (chuẩn của Yeh et al. 2016); chạy thêm --no-normalize làm ablation
+    refractory: 24                     # sau 1 alert bỏ qua m mẫu: 1 discord làm m đoạn con liên tiếp có điểm cao

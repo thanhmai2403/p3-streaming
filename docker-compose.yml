@@ -33,6 +33,7 @@ x-flink: &flink
       restart-strategy.fixed-delay.delay: 2 s
       python.executable: /usr/local/bin/python3
       python.client.executable: /usr/local/bin/python3
+      python.execution-mode: thread
 
 services:
   kafka:
