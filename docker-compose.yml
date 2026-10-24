@@ -1,0 +1,97 @@
+# P3: Kafka (KRaft, 1 broker) + Flink (1 JobManager, 2 TaskManager x 2 slot).
+# Phần Spark (spark-master, spark-worker x2) do B thêm vào cuối file.
+# Tài nguyên engine (README mục 4): TaskManager 2 x (2 core, 3.5 GB) = 4 core cho xử lý.
+# JobManager (điều phối) để riêng 0.5 core / 1 GB -> Spark master phải để y hệt cho công bằng.
+# MỖI LẦN CHỈ BẬT MỘT ENGINE.
+
+name: p3
+
+x-flink: &flink
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.flink
+  image: p3-flink:2.2.1
+  volumes:
+    - ./:/opt/p3:ro
+    - flink-checkpoints:/checkpoints
+  depends_on:
+    kafka:
+      condition: service_healthy
+  environment:
+    PYTHONPATH: /opt/p3
+    P3_CONFIG: /opt/p3/config.yaml
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: flink-jobmanager
+      taskmanager.numberOfTaskSlots: 2
+      parallelism.default: 4
+      jobmanager.memory.process.size: 1024m
+      taskmanager.memory.process.size: 3072m
+      state.backend.type: rocksdb
+      execution.checkpointing.dir: file:///checkpoints/flink
+      restart-strategy.type: fixed-delay
+      restart-strategy.fixed-delay.attempts: 1000
+      restart-strategy.fixed-delay.delay: 2 s
+      python.executable: /usr/local/bin/python3
+      python.client.executable: /usr/local/bin/python3
+
+services:
+  kafka:
+    image: apache/kafka:4.2.2
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # 1 broker -> mọi topic nội bộ phải RF = 1 (nếu không, consumer group / transaction sẽ treo)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: "-Xms1g -Xmx1g"
+    cpus: 2
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  flink-jobmanager:
+    <<: *flink
+    container_name: flink-jm
+    hostname: flink-jobmanager
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    cpus: 0.5
+    mem_limit: 1200m
+
+  # Hai TaskManager đặt tên riêng để RQ3 kill đúng 1 container (docker kill flink-tm1).
+  flink-taskmanager-1:
+    <<: *flink
+    container_name: flink-tm1
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    cpus: 2
+    mem_limit: 3500m
+
+  flink-taskmanager-2:
+    <<: *flink
+    container_name: flink-tm2
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    cpus: 2
+    mem_limit: 3500m
+
+volumes:
+  flink-checkpoints:

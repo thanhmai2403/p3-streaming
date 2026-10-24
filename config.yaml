@@ -1,0 +1,56 @@
+# Nguồn DUY NHẤT của mọi tham số (README mục 4). Code không được hard-code các giá trị này.
+# Muốn đổi: commit riêng + báo người kia TRƯỚC khi đổi code.
+version: 1
+
+kafka:
+  bootstrap_internal: "kafka:9092"     # dùng trong mạng docker (Flink/Spark)
+  bootstrap_host: "localhost:29092"    # dùng từ máy host (producer, measure)
+  topic_in: sensor
+  topic_out: alerts
+  partitions: 6
+  replication_factor: 1
+  starting_offsets: earliest
+  producer:                            # cấu hình confluent-kafka dùng chung (README mục 8)
+    linger.ms: 5
+    batch.size: 65536
+    acks: "1"
+    compression.type: none
+
+detector:
+  key: [station_id, param]
+  warmup: 24                           # 24 mẫu đầu mỗi key: chỉ cập nhật state
+  zscore:
+    window: 24
+    threshold: 3.0
+    min_std: 1.0e-9                    # std quần thể (ddof = 0)
+  ewma:
+    lambda: 0.3
+    L: 3.0
+    min_var: 1.0e-9
+
+late:
+  tolerance_ms: 7200000                # 2 giờ event-time (README 6.3)
+
+probe:
+  every: 100                           # seq % 100 == 0 -> phát thêm 1 bản ghi probe
+
+engine:
+  parallelism: 4
+  checkpoint_interval_ms: 10000
+  state_backend: rocksdb
+
+flink:
+  consumer_group: flink-job
+  watermark_ms: 10000                  # chỉ để engine chạy bình thường, KHÔNG dùng timer event-time
+  delivery_guarantee: AT_LEAST_ONCE    # RQ3 chạy thêm EXACTLY_ONCE
+  transactional_id_prefix: p3-flink
+  transaction_timeout_ms: 600000       # phải <= transaction.max.timeout.ms của broker (mặc định 15 phút)
+  checkpoint_dir: "file:///checkpoints/flink"
+
+spark:
+  shuffle_partitions: 4
+  checkpoint_dir: "/checkpoints/spark"
+
+measure:
+  warmup_s: 30
+  duration_s: 180
