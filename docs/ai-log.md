@@ -133,4 +133,37 @@
 - Đã sửa gì so với AI: chấm cả 4 bộ alert trong **một** lần chạy (bảng trên) thay vì tin kết quả cũ; phát hiện và sửa lỗi dedupe `seq = null`; đổi detection delay sang hiệu `recv_ts_ms − ingest_ts_ms` để không phụ thuộc `sent.csv`; thêm kiểm tra `docker compose version`, chờ job RUNNING và `bash -n` trước khi commit.
 - Chưa làm: chưa build/`docker compose up` (môi trường này không có Docker CLI) nên phần submit Spark/Flink trong `run_experiment.sh` mới chỉ được kiểm tra cú pháp, chưa chạy thật.
 
+## 2026-10-25 – [B] – README 7.1 chi tiết, `docs/handover_B.md`, `scripts/plot_results.py`, bản thảo báo cáo IEEE của B
+- Công cụ: Cline (Claude)
+- Yêu cầu chính (rút gọn): 4 hạng mục tiếp theo của B sau khi xong Ưu tiên 0/1:
+  1. Điền rõ quy tắc tiền xử lý OpenAQ Hà Nội vào **README 7.1** (3 trạm + location id, 19 568 dòng, `median_gap = 60 phút`, quy tắc `floor` về đầu giờ UTC + `mean`, ≥ 1 mẫu/giờ, không nội suy; `seed = 42`, `min_gap = 48` giờ, 30 sự kiện/trạm → 90 nhãn).
+  2. Viết **`docs/handover_B.md`** theo bố cục bảng biểu giống `handover_A.md` (tóm tắt, file đã làm, bảng chấm chất lượng + phân tích MP, phát hiện kỹ thuật, trả lời 5 câu hỏi mở ở Mục 7 của handover_A, lệnh nhanh).
+  3. Viết **`scripts/plot_results.py`**: 3 hình IEEE (RQ2 cột nhóm P/R/F1; RQ1 thông lượng vs p99 kèm min–max; RQ3 p99 quanh lúc kill worker), xuất `.png` 300 DPI + `.pdf` vào `results/plots/`, có `--check` / `--demo` để kiểm tra hàm vẽ khi chưa có CSV của RQ1/RQ3.
+  4. Viết **`docs/report_B_draft.md`** (Mục 0 Tóm tắt, Mục 4 phương pháp + dữ liệu, Mục 5 thiết kế thí nghiệm + metric, Mục 8 giới hạn, Mục 9 kết luận), rồi cập nhật `ai-log.md`, commit và push `b/data`.
+- `README.md`:
+  - **7.1 viết lại** thành 6 bước làm sạch có số dòng thật từ `data/processed/cleaning_report.json` (455 512 → 97 118 pm25 → bỏ 57 giá trị âm → 97 061 → 19 568 mẫu/giờ) + bảng 3 trạm.
+  - **Đo lại tần suất gốc** từ `data/raw/locationid=*/year=*/month=*/*.csv.gz` thay vì suy đoán: `hn_01` (2161292) **60 phút**, `hn_02` (4946813) **5 phút**, `hn_03` (6123215) **60 phút** ⇒ chỉ `hn_02` thực sự bị gộp 12:1; `hn_01`/`hn_03` đi qua bước resample mà không đổi giá trị.
+  - Ghi rõ `floor` là về **mốc đầu giờ UTC** (= 07:00 giờ Việt Nam) để A không hiểu nhầm là đầu giờ địa phương.
+  - **7.2** nói rõ 30/trạm → 90 nhãn, `min_gap = 48` mẫu **= 48 giờ**, `skip_first = 48` (tránh vùng warm-up 24 mẫu).
+  - **10.4/10.5**: thay dòng `figures/` bằng `results/plots/` + bảng mô tả 3 hình và cách gọi `scripts/plot_results.py`.
+- `scripts/plot_results.py` (mới, ~460 dòng):
+  - `load_quality()` gộp **mọi** file `results/summary/rq2*quality*.csv` (+ `rq2.csv` nếu có cột P/R/F1), nên sau này run streaming tự sinh `rq2_<engine>_<cfg>_r<n>_quality.csv` là hình tự có thêm cột `flink/zscore`…; `quality_rows()` xếp 4 phương pháp trước (ưu tiên `offline`), detector lạ vẫn được vẽ.
+  - `plot_rq1()`: gom theo `(engine, cfg)`, trung bình + thanh sai số **min–max** cả hai trục, nhãn cấu hình cạnh điểm, đường ngưỡng `measure.sustain_p99_ms` đọc từ `config.yaml`.
+  - `load_rq3()`: đọc `results/raw/rq3_*/latency.csv` + `meta.json`, tính `lat = recv − ingest`, cửa sổ **5 s** (`measure.recovery_window_s`) trong `[kill − 30 s, kill + 150 s]`, lấy `recovery_s` từ `summary.json` để in trong legend; `plot_rq3()` kẻ đường `t = 0` = lúc kill.
+  - `--check` vẽ cả 3 hình bằng dữ liệu giả vào **thư mục tạm** rồi kiểm tra đủ 6 file (PNG+PDF) và in trạng thái dữ liệu thật; `--demo` vẽ vào `results/plots/demo/`. Cùng một hàm vẽ dùng cho cả 3 chế độ (không có nhánh code riêng cho demo).
+  - Thiếu dữ liệu thì **bỏ qua + in lý do** (exit 0), lỗi vẽ thật thì raise (exit 1).
+- `docs/handover_B.md` (mới): 6 mục; **trả lời từng câu** trong 5 câu hỏi mở của A (máy đo, mức tải RQ1, README 7.1, đồng ý/không đồng ý 6 thay đổi ở mục 2, ai chạy RQ1/RQ3 phía Flink + nháp Thảo luận). Có bảng 4 phương pháp với số thật và 4 lập luận vì sao MP thấp + gợi ý tinh chỉnh cho A.
+- `docs/report_B_draft.md` (mới): Mục 0/4/5/8/9 + danh sách tham khảo nháp; công thức z-score, EWMA (kiểm tra trước – cập nhật sau), quy tắc trễ, HST, Matrix Profile; bảng công bằng Flink↔Spark, định nghĩa 7 metric, ma trận RQ0–RQ3, 9 mục giới hạn.
+- Đã kiểm tra bằng:
+  - `python scripts/plot_results.py --check` → `CHECK OK` (6/6 file, dữ liệu giả), in đúng trạng thái dữ liệu thật (`rq2_offline_quality.csv=True, rq1.csv=True, run rq3=False`).
+  - `python scripts/plot_results.py` → **4 file thật**: `results/plots/rq2_quality_comparison.{png,pdf}` (4 phương pháp) và `results/plots/rq1_throughput_latency.{png,pdf}` (1 điểm `flink/try5000`); RQ3 bị bỏ qua kèm thông báo (chưa có run nào có `kill_ts_ms`).
+  - Đọc lại PDF: font DejaVuSans nhúng dạng CID (fonttype 42), MediaBox 3,5 in ⇒ đúng khổ 1 cột IEEE; PNG 300 DPI.
+  - Số liệu trong README/handover/report đều đối chiếu lại file thật: `cleaning_report.json`, `stations.csv`, `labels.csv`, `results/summary/rq2_offline_quality.csv`, `rq2_offline_mp_r1/meta.json`.
+- Đã sửa gì so với AI / phát hiện thêm:
+  - venv **thiếu `matplotlib`** dù đã ghim `matplotlib==3.11.2` trong `requirements.txt` → cài đúng bản ghim (kéo theo contourpy/cycler/fonttools/kiwisolver/packaging/pillow/pyparsing). Ai clone repo cần `pip install -r requirements.txt` **đủ**, không chỉ các gói của Spark.
+  - Bảng markdown bị vỡ khi ô chứa ký tự `|` (`MinMaxScaler() | HalfSpaceTrees(...)`) → đổi thành `→`.
+  - Khi chỉ có 1 engine trong `rq1.csv`, hình RQ1 hiện **1 điểm** — đúng như thiết kế (không bịa dữ liệu Spark), nhưng phải chờ đợt đo Spark mới có hình so sánh thật.
+- Chưa làm: vẫn **không có Docker CLI** trong phiên này nên chưa build/`docker compose up`; chưa có RQ1/RQ3 thật ⇒ hình `rq1_throughput_latency` mới 1 điểm và `rq3_fault_recovery` chưa sinh (đã kiểm tra bằng `--demo`/`--check`).
+
+
 

@@ -230,14 +230,35 @@ Hệ quả cho các engine:
 
 ### 7.1 OpenAQ Hà Nội (B)
 
-- Nguồn: kho lưu trữ OpenAQ trên AWS S3 (`openaq-data-archive`). Dùng S3 thay vì API để tránh bị giới hạn tần suất.
-- Phạm vi: 1–3 trạm PM2.5 ở Hà Nội, 12 tháng gần nhất có đủ dữ liệu, tần suất theo giờ.
-- Làm sạch: bỏ giá trị null và giá trị âm, bỏ timestamp trùng (giữ bản đầu), sắp xếp theo `event_time_ms`. Ghi lại số dòng đã bỏ.
-- Đổi tên trạm thành `hn_01`, `hn_02`…, lưu bảng tra mã gốc ở `data/processed/stations.csv`.
+**Nguồn.** Kho lưu trữ OpenAQ trên AWS S3 (`openaq-data-archive`), đọc trực tiếp file CSV gzip theo `locationid/year/month`. Dùng S3 thay vì API để tránh bị giới hạn tần suất. Script: `data/download_openaq.py`.
+
+**Phạm vi.** 12 tháng `2025-10-23` → `2026-10-22`, chỉ `parameter = pm25`. 3 trạm Hà Nội, đổi tên thành `hn_01`, `hn_02`, `hn_03`; bảng tra mã gốc ở `data/processed/stations.csv`:
+
+| `station_id` | `location_id` OpenAQ | Tần suất gốc | Mẫu/giờ sau làm sạch |
+| --- | --- | --- | --- |
+| `hn_01` | `2161292` | 60 phút | 3 439 |
+| `hn_02` | `4946813` | **5 phút** | 8 055 |
+| `hn_03` | `6123215` | 60 phút | 8 074 |
+| **Tổng** | | | **19 568** |
+
+`hn_01` dùng location `2161292` (3 439 mẫu, phủ đủ 12 tháng) thay cho `2161306` chỉ có 1 525 mẫu (~9 tháng) nên không đủ mẫu để chèn 30 bất thường cách nhau ≥ 48 giờ.
+
+**Làm sạch** (`clean()` trong `data/download_openaq.py`; số dòng từng bước ghi ở `data/processed/cleaning_report.json`):
+
+1. Lọc `parameter = pm25`: 455 512 → 97 118 dòng.
+2. Bỏ `value` null (**0** dòng) và `value < 0` (**57** dòng) → 97 061 dòng.
+3. Đổi `datetime` (ISO8601, UTC) sang `event_time_ms` (epoch ms), sắp xếp theo (`station_id`, `event_time_ms`).
+4. Bỏ timestamp trùng, giữ bản đầu (**0** dòng).
+5. **Gộp về 1 mẫu/giờ** (trạm có tần suất gốc > 1 mẫu/giờ, ở đây là `hn_02` 5 phút): làm tròn **xuống** (`floor`) `event_time_ms` về mốc đầu giờ — bội số của 3 600 000 ms, tức phút `00:00` **theo UTC** (07:00 giờ Việt Nam) — rồi lấy **trung bình cộng** (`mean`) các mẫu hợp lệ trong giờ đó. Mỗi giờ cần **≥ 1 mẫu**; **không nội suy** khoảng trống (giờ không có mẫu nào thì không sinh mẫu). Trạm vốn đã 1 mẫu/giờ (`hn_01`, `hn_03`) đi qua bước này không đổi giá trị.
+6. Đầu ra `data/processed/openaq_hn_clean.parquet` (4 cột `station_id, param, value, event_time_ms`): **19 568 dòng**, `median_gap = 60 phút` ở **cả 3 trạm** (giá trị `value` là `float64`, không có null).
+
+Vì bước 5 không nội suy, `median_gap = 60 phút` chỉ nói *tần suất* là theo giờ; chuỗi vẫn có lỗ hổng (ví dụ `hn_01` chỉ có 3 439/8 760 giờ của năm). Detection phải chịu được điều này: state dùng **số mẫu** (warm-up 24 mẫu), không dùng khoảng thời gian.
+
+**Chèn bất thường** (`data/inject_anomalies.py`, xem 7.2): `seed = 42`, `min_gap = 48` mẫu (**= 48 giờ** vì chuỗi đã gộp theo giờ), `skip_first = 48` mẫu, **30 sự kiện/trạm** (`spike`, `level_shift`, `drift`) → **90 nhãn** trong `data/processed/labels.csv` (`spike` 32, `level_shift` 33, `drift` 25).
 
 ### 7.2 Chèn bất thường: `inject_anomalies.py` (B, seed 42)
 
-Gọi σ là độ lệch chuẩn của chuỗi gốc theo từng trạm. Mỗi trạm được chèn khoảng **30 bất thường**, các bất thường cách nhau ít nhất 48 mẫu:
+Gọi σ là độ lệch chuẩn của chuỗi gốc theo từng trạm. Mỗi trạm được chèn **đúng 30 bất thường** (3 trạm → **90 nhãn**), các bất thường cách nhau ít nhất **48 mẫu = 48 giờ** (chuỗi đã gộp theo giờ, mục 7.1) và không chèn vào 48 mẫu đầu (`skip_first = 48`, tránh vùng warm-up 24 mẫu của detector):
 
 | Loại | Cách chèn | Độ dài |
 | --- | --- | --- |
@@ -342,10 +363,28 @@ results/raw/<run_id>/
     docker_stats.csv   # ts_ms, container, cpu_pct, mem_mb
     engine.log         # có số late_dropped
 results/summary/rq1.csv, rq2.csv, rq3.csv   # mỗi dòng một run_id
-figures/                                    # PNG + script vẽ trong measure/
+results/plots/                              # hình cho báo cáo: .png (300 DPI) + .pdf
+                                            # sinh bằng scripts/plot_results.py (mục 10.5)
 ```
 
 Không sửa tay file trong `results/raw/`. Thấy lần chạy nào hỏng thì chạy lại với số `r` mới và ghi lý do vào `meta.json`.
+
+### 10.5 Vẽ hình cho báo cáo: `scripts/plot_results.py` (B)
+
+```
+python scripts/plot_results.py                 # vẽ tất cả hình có dữ liệu -> results/plots/
+python scripts/plot_results.py --fig quality   # chỉ RQ2 (quality | rq1 | rq3)
+python scripts/plot_results.py --check         # kiểm tra hàm vẽ, KHÔNG ghi vào results/plots/
+python scripts/plot_results.py --demo          # vẽ bằng dữ liệu giả để thử
+```
+
+| Hình | Nguồn | Nội dung |
+| --- | --- | --- |
+| `rq2_quality_comparison` | `results/summary/rq2_offline_quality.csv` (+ `rq2.csv` nếu có) | cột nhóm Precision / Recall / F1 của `zscore`, `ewma`, `hst`, `mp` |
+| `rq1_throughput_latency` | `results/summary/rq1.csv` | thông lượng (trục x) vs p99 (trục y) của Flink và Spark, thanh sai số = min–max qua các lần lặp |
+| `rq3_fault_recovery` | `results/raw/rq3_*/latency.csv` + `meta.json` (`kill_ts_ms`) | p99 theo cửa sổ 5 s quanh thời điểm kill worker ở giây 60 |
+
+Hình nào thiếu dữ liệu thì script **bỏ qua và báo rõ**, không lỗi. Cùng một hàm vẽ dùng cho `--demo` nên thêm hình mới thì thêm cả hai nhánh.
 
 ---
 
