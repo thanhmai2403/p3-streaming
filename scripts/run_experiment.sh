@@ -33,14 +33,28 @@
 #
 # Biến môi trường hay dùng: RATE, DURATION_S, PRODUCERS, KILL_AT_S, RESTART_AFTER_S, KILL_CT,
 # DELIVERY=EXACTLY_ONCE, REPLAY_FILE, REPLAY_SPEED, MAX_SECONDS, FORCE=1 (cho phép chạy lại
-# run_id đã có kết quả), WARMUP_S, DRAIN_S.
+# run_id đã có kết quả), WARMUP_S, DRAIN_S (tối thiểu), DRAIN_MAX_S (mặc định 300), SPARK_EXECUTOR_MEMORY (mặc định 2400m), SPARK_DRIVER_MEMORY (mặc định 600m).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Git Bash/docker.exe/python.exe trên Windows cần dạng 'C:/...' (pwd -W); WSL không có -W nên giữ 'pwd'.
+REPO_ROOT="$(cd "$REPO_ROOT" && { pwd -W 2>/dev/null || pwd; })"
 cd "$REPO_ROOT"
+# Git Bash trên Windows tự dịch '/opt/...' -> 'C:/Program Files/Git/opt/...' (MSYS path conversion),
+# làm mọi lệnh `docker compose exec ... /opt/...` sai đường dẫn. Trên WSL biến này không có tác dụng.
+export MSYS_NO_PATHCONV=1
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.yml")
+# File override (máy B: docker-compose.lowmem.yml). COMPOSE_FILE dùng ':' (WSL) hoặc ';' (Windows).
+if [ -n "${COMPOSE_FILE:-}" ]; then
+  IFS=':;' read -r -a _compose_files <<<"$COMPOSE_FILE"
+  for _f in "${_compose_files[@]}"; do
+    [ -n "$_f" ] || continue
+    if [ "$(basename "$_f")" != "docker-compose.yml" ]; then COMPOSE+=(-f "$_f"); fi
+  done
+fi
+unset COMPOSE_FILE   # docker CLI trên Windows không nhận dạng được dấu ':' -> tránh lỗi "compose file invalid"
 
-usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^#\ \{0,1\}//'; }
+usage() { sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^#\ \{0,1\}//'; }
 
 if [ $# -ne 4 ]; then
   usage
@@ -72,7 +86,8 @@ RATE="${RATE:-2000}"                            # sự kiện/giây (tổng củ
 DURATION_S="${DURATION_S:-210}"                 # 30 s warm-up + 180 s đo (config.yaml: measure)
 PRODUCERS="${PRODUCERS:-1}"                     # chia tải bằng --producer-id/--n-producers
 WARMUP_S="${WARMUP_S:-30}"
-DRAIN_S="${DRAIN_S:-20}"                        # chờ alert cuối cùng
+DRAIN_S="${DRAIN_S:-20}"                        # mức chờ TỐI THIỂU trước khi coi là đã drain
+DRAIN_MAX_S="${DRAIN_MAX_S:-300}"               # chờ tối đa khi topic alerts vẫn còn tăng offset
 WAIT_RUNNING_S="${WAIT_RUNNING_S:-180}"
 HOST_BROKERS="${HOST_BROKERS:-localhost:29092}" # producer/measure chạy trên host
 IN_BROKERS="${IN_BROKERS:-kafka:9092}"          # job trong mạng docker
@@ -85,6 +100,8 @@ DELIVERY="${DELIVERY:-AT_LEAST_ONCE}"           # EXACTLY_ONCE: chỉ Flink có 
 LABELS="${LABELS:-data/processed/labels.csv}"
 SPARK_PACKAGES="${SPARK_PACKAGES:-org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3}"
 MASTER_URL="${MASTER_URL:-spark://spark-master:7077}"
+SPARK_EXECUTOR_MEMORY="${SPARK_EXECUTOR_MEMORY:-2400m}"  # phải <= SPARK_WORKER_MEMORY (lowmem: 1280m)
+SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-600m}"       # driver chạy chung spark-master (lowmem: <= 384m)
 
 case "$ENGINE" in
   flink)
@@ -158,9 +175,9 @@ else
   SPARK_SUBMIT=(/opt/spark/bin/spark-submit
     --master "$MASTER_URL"
     --deploy-mode client
-    --packages "$SPARK_PACKAGES"
-    --driver-memory 600m
-    --conf spark.executor.memory=2400m
+    --conf spark.jars.ivy=/tmp/.ivy2
+    --driver-memory "$SPARK_DRIVER_MEMORY"
+    --conf spark.executor.memory="$SPARK_EXECUTOR_MEMORY"
     --conf spark.executor.cores=2
     --conf spark.cores.max=4
     --conf spark.sql.shuffle.partitions=4
@@ -179,13 +196,27 @@ job_running() {
     out=$(DC exec -T flink-jobmanager flink list -r 2>/dev/null || true)
     [[ "$out" =~ [0-9a-f]{32} ]]
   else
-    DC exec -T spark-master grep -q 'checkpoint=' "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null
+    # Chỉ coi là "job đã sẵn sàng" khi batch đầu ĐÃ COMMIT offset xuống Kafka (tức job đã xử lý được dữ liệu)
+    DC exec -T spark-master grep -q 'Committed offsets for batch' "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null
   fi
 }
 
-log "      chờ job nhận việc (tối đa ${WAIT_RUNNING_S}s)..."
+job_failed() {
+  # Lỗi thật của driver (vd. thiếu jar connector: NoClassDefFoundError) -> in log và dừng ngay,
+  # không chờ hết WAIT_RUNNING_S rồi mới báo "job không chạy".
+  [ "$ENGINE" = spark ] || return 1
+  DC exec -T spark-master grep -qE 'Traceback|INVALID_|Exception|NoClassDefFoundError' \
+    "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null
+}
+
+log "      chờ job chạy và commit batch đầu (tối đa ${WAIT_RUNNING_S}s)..."
 ready=0
 for ((i = 0; i < WAIT_RUNNING_S; i += 3)); do
+  if job_failed; then
+    log "      LỖI trong driver log của $RUN_ID (30 dòng cuối):"
+    DC exec -T spark-master tail -n 30 "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null || true
+    die "job spark báo lỗi ngay khi khởi động (xem $OUT/submit.log, engine.log)"
+  fi
   if job_running; then ready=1; break; fi
   sleep 3
 done
@@ -269,8 +300,30 @@ prod_fail=0
 for pid in "${PROD_PIDS[@]}"; do wait "$pid" || prod_fail=1; done
 [ "$prod_fail" = "0" ] || log "CẢNH BÁO: có producer lỗi (xem $OUT/producer_*.log)"
 if [ -n "$KILLER_PID" ]; then wait "$KILLER_PID" 2>/dev/null || true; fi
-log "producer xong; chờ drain ${DRAIN_S}s"
+alerts_total_offset() {  # tổng offset cuối của mọi partition topic alerts (0 nếu không đọc được)
+  DC exec -T kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$IN_BROKERS" \
+    --topic alerts --time -1 2>/dev/null | awk -F: 'NF { s += $3 } END { printf "%d", s+0 }' || true
+}
+log "producer xong; chờ drain (tối thiểu ${DRAIN_S}s; dừng khi offset alerts đứng yên 20s; tối đa ${DRAIN_MAX_S}s)"
 sleep "$DRAIN_S"
+drain_last=$(alerts_total_offset)
+drain_stable=0
+drain_deadline=$(( $(date +%s) + DRAIN_MAX_S - DRAIN_S ))
+while [ "$drain_stable" -lt 20 ]; do
+  if [ "$(date +%s)" -ge "$drain_deadline" ]; then
+    log "CẢNH BÁO: hết DRAIN_MAX_S (${DRAIN_MAX_S}s) mà offset topic alerts vẫn tăng (tổng=$drain_last)"
+    break
+  fi
+  sleep 5
+  drain_now=$(alerts_total_offset)
+  if [ "$drain_now" = "$drain_last" ]; then
+    drain_stable=$(( drain_stable + 5 ))
+  else
+    drain_stable=0
+    drain_last=$drain_now
+  fi
+done
+log "      drain xong: tổng offset topic alerts = $drain_last (đứng yên ${drain_stable}s)"
 
 # ------------------------------------------- (7) hủy job + tổng hợp kết quả
 log "[7/7] Hủy job, tổng hợp kết quả"

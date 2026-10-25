@@ -49,7 +49,7 @@
   4. **pyspark 4.1 đã bỏ `DataFrame.applyInPandas`** (`[ATTRIBUTE_NOT_SUPPORTED]`); thay bằng `mapInPandas` (nhận iterator pandas DF). `applyInPandasWithState` trên `GroupedData` vẫn hoạt động bình thường (đã xác minh).
   5. Môi trường local: JDK 21 (`_fix_java`), winutils + hadoop.dll (cdarlint/winutils hadoop-3.3.6), `PYSPARK_PYTHON=sys.executable`; chạy nền bằng PowerShell `Start-Process -WindowStyle Hidden` + redirect stdout/stderr riêng (chạy chung console tool dễ bị Ctrl+C giết giữa chừng).
 - Đã kiểm tra bằng: đọc `smoke_result.txt` (BẮT ĐẦU/sanity/status từng 5s/KẾT từng pha/PASS); sanity pandas UDF tĩnh OK; batches đều 300–500 rows; không còn lỗi UDF trong toàn bộ 2 pha.
-- Chưa làm (bước tiếp): build Docker (`docker compose -f docker-compose.yml build` khi có Docker CLI); chạy `run_experiment.sh` với `RUN_ID=rq1_spark_replay_r1 CONFIG=replay` khi có Kafka.
+- Chưa làm (bước tiếp): build Docker (`docker compose -f docker-compose.yml build` khi có Docker CLI); chạy `run_experiment.sh` với `RUN_ID=rq1_spark_replay_r1 CONFIG=replay` khi có Kafka. *(nay đã khắc phục: Docker + Kafka chạy được trên máy B — xem `docs/handover_B.md` mục 3.8)*
 
 ## 2026-10-24 – [B] – Kiểm tra tương đương THẬT: applyInPandasWithState (Spark) vs bản tham chiếu offline — TƯƠNG ĐƯƠNG
 - Công cụ: Cline (Claude)
@@ -91,7 +91,7 @@
   - `spark_job/job.py`: `spark.sql.shuffle.partitions` = `spark.shuffle_partitions` = **4**; checkpoint `/checkpoints/spark/<run_id>`; **không** gọi `withWatermark`; `sort_values("seq", kind="stable")` trong pandas UDF.
 - Chưa làm / lưu ý:
   - Việc thống nhất `scripts/run_experiment.sh` (dùng `measure_perf.py`, network mặc định `p3`) **đã xử lý** ở mục 2026-10-25 bên dưới.
-  - Chưa build/chạy Docker trong phiên này (môi trường không có Docker CLI).
+  - Chưa build/chạy Docker trong phiên này (môi trường không có Docker CLI). *(nay đã khắc phục: Docker chạy được trên máy B — xem `docs/handover_B.md` mục 3.8)*
 
 ## 2026-10-25 – [B] – Hoàn thiện Ưu tiên 0 & 1 sau merge: measure_quality v2, run_experiment.sh 7 bước, chấm MP của A
 - Công cụ: Cline (Claude)
@@ -106,7 +106,7 @@
   - Cột kết quả: `detection_delay_ms_{median,mean,p95}`, `detection_delay_n`, `detection_delay_hours_event_median`, `has_recv_ts_ms`; thiếu giờ máy thì NaN (CSV để trống) nhưng P/R/F1 vẫn tính; `--window-hours` mặc định 1.0.
 - `scripts/run_experiment.sh` (viết lại toàn bộ):
   - Cú pháp `bash scripts/run_experiment.sh <rq0|rq1|rq2|rq3> <flink|spark> <config> <lần>`; `run_id = <rq>_<engine>_<config>_r<lần>` khớp regex của `measure_perf.parse_run_id`; từ chối chạy lại run_id đã có kết quả (trừ `FORCE=1`).
-  - 7 bước đúng handover: (1) `check_clock.sh` — lệch thì `exit 1`; (2) `docker compose stop` engine kia + `create_topics.sh` + xoá `/checkpoints/{flink,spark}/<run_id>`; (3) submit — Flink `flink run -d -py /opt/p3/flink_job/job.py --run-id <id>` (thêm `--delivery EXACTLY_ONCE` khi `DELIVERY=EXACTLY_ONCE`), Spark `spark-submit --master spark://spark-master:7077 --conf spark.cores.max=4 --conf spark.executor.cores=2 --conf spark.executor.memory=2400m --conf spark.sql.shuffle.partitions=4` (driver log `/tmp/p3_driver_<run_id>.log` trong container) rồi chờ job chạy; (4) `measure_perf.py collect --docker-stats` chạy nền; (5) producer: `rq0` replay `equiv_10k --speed 2000`, `rq1/rq3` `--mode rate --rate <R> --duration 210`, `rq2` replay OpenAQ `--late-fraction 0.05 --late-shift 1 4`, chia `--producer-id/--n-producers` khi `PRODUCERS>1`; (6) rq3 giết `flink-tm1`/`spark-worker-1` ở giây `KILL_AT_S=60` rồi `docker start`, ghi `kill_ts_ms` + `killed_container` vào `meta.json`; (7) hủy job (`flink cancel` / `pkill spark_job/job.py`), `summarize`, `measure_quality.py` nếu rq2, `check_clock.sh` lần cuối.
+  - 7 bước đúng handover: (1) `check_clock.sh` — lệch thì `exit 1`; (2) `docker compose stop` engine kia + `create_topics.sh` + xoá `/checkpoints/{flink,spark}/<run_id>`; (3) submit — Flink `flink run -d -py /opt/p3/flink_job/job.py --run-id <id>` (thêm `--delivery EXACTLY_ONCE` khi `DELIVERY=EXACTLY_ONCE`), Spark `spark-submit --master spark://spark-master:7077 --driver-memory $SPARK_DRIVER_MEMORY --conf spark.cores.max=4 --conf spark.executor.cores=2 --conf spark.executor.memory=$SPARK_EXECUTOR_MEMORY --conf spark.jars.ivy=/tmp/.ivy2 --conf spark.sql.shuffle.partitions=4` (hai biến RAM mặc định 600m/2400m, lowmem đặt 512m/1024m; connector Kafka nhúng sẵn trong image; driver log `/tmp/p3_driver_<run_id>.log` trong container) rồi chờ job chạy; (4) `measure_perf.py collect --docker-stats` chạy nền; (5) producer: `rq0` replay `equiv_10k --speed 2000`, `rq1/rq3` `--mode rate --rate <R> --duration 210`, `rq2` replay OpenAQ `--late-fraction 0.05 --late-shift 1 4`, chia `--producer-id/--n-producers` khi `PRODUCERS>1`; (6) rq3 giết `flink-tm1`/`spark-worker-1` ở giây `KILL_AT_S=60` rồi `docker start`, ghi `kill_ts_ms` + `killed_container` vào `meta.json`; (7) hủy job (`flink cancel` / `pkill spark_job/job.py`), `summarize`, `measure_quality.py` nếu rq2, `check_clock.sh` lần cuối.
   - Bỏ hẳn `measure/measure_latency.py` và `docker network connect p3-net` khỏi luồng chạy (giữ `measure_latency.py` trong repo làm tham khảo).
   - `bash -n` trên bản LF: **OK**. (Các file `.sh` trong working tree là CRLF do `core.autocrlf=true`; blob trong git là LF.)
 - Chấm lại chất lượng trên `data/processed/labels.csv` (90 nhãn, cửa sổ `[start, end+1h]`, cùng một bộ chấm):
@@ -128,10 +128,10 @@
   - `test_mp`: 3 biến thể Matrix Profile chạy được trên chuỗi giả → **PASS**.
 - Thông số máy B (để chốt máy đo):
   - Windows 11 Home, **AMD Ryzen 5 5600U — 6 core vật lý / 12 luồng**, **13,84 GB RAM**.
-  - WSL2 Ubuntu: **nproc = 8**, `MemTotal = 9 154 240 kB ≈ 8,73 GiB` (chưa có `.wslconfig` riêng); Docker Desktop đang Stop.
-  - **Cảnh báo:** compose hiện tại cần Kafka 2 CPU/3 GB + engine 4 CPU/(1,2 + 2×3,5 GB) = **~11,2 GB**, vượt RAM WSL (8,73 GB). Trước khi chạy RQ1/RQ3 phải tăng `memory=` trong `%UserProfile%\.wslconfig` (máy có 13,84 GB → đặt 10–11 GB) hoặc giảm Kafka xuống ~1,5–2 GB. CPU đủ (8 vCPU ≥ 6 core cần dùng).
+  - WSL2 Ubuntu: **nproc = 8**, `MemTotal = 9 154 240 kB ≈ 8,73 GiB` (`.wslconfig`: `memory=9GB`, `processors=8`, `swap=4GB`); Docker Desktop đã chạy (WSL integration bật).
+  - **Cảnh báo:** compose hiện tại cần Kafka 2 CPU/3 GB + engine 4 CPU/(1,2 + 2×3,5 GB) = **~11,2 GB**, vượt RAM WSL (8,73 GB). Máy B đã chốt `memory=9GB` trong `%UserProfile%\.wslconfig` (không nâng lên 10–11 GB) và **không** làm máy đo RQ1/RQ3; chỉ chạy RQ0/RQ2 bằng `docker-compose.lowmem.yml` (Kafka 1,5 GB, tổng ~6,9 GB). CPU đủ (8 vCPU ≥ 6 core cần dùng).
 - Đã sửa gì so với AI: chấm cả 4 bộ alert trong **một** lần chạy (bảng trên) thay vì tin kết quả cũ; phát hiện và sửa lỗi dedupe `seq = null`; đổi detection delay sang hiệu `recv_ts_ms − ingest_ts_ms` để không phụ thuộc `sent.csv`; thêm kiểm tra `docker compose version`, chờ job RUNNING và `bash -n` trước khi commit.
-- Chưa làm: chưa build/`docker compose up` (môi trường này không có Docker CLI) nên phần submit Spark/Flink trong `run_experiment.sh` mới chỉ được kiểm tra cú pháp, chưa chạy thật.
+- Chưa làm: chưa build/`docker compose up` (môi trường này không có Docker CLI) nên phần submit Spark/Flink trong `run_experiment.sh` mới chỉ được kiểm tra cú pháp, chưa chạy thật. *(nay đã khắc phục: Docker chạy được trên máy B — xem `docs/handover_B.md` mục 3.8)*
 
 ## 2026-10-25 – [B] – README 7.1 chi tiết, `docs/handover_B.md`, `scripts/plot_results.py`, bản thảo báo cáo IEEE của B
 - Công cụ: Cline (Claude)
@@ -163,7 +163,7 @@
   - venv **thiếu `matplotlib`** dù đã ghim `matplotlib==3.11.2` trong `requirements.txt` → cài đúng bản ghim (kéo theo contourpy/cycler/fonttools/kiwisolver/packaging/pillow/pyparsing). Ai clone repo cần `pip install -r requirements.txt` **đủ**, không chỉ các gói của Spark.
   - Bảng markdown bị vỡ khi ô chứa ký tự `|` (`MinMaxScaler() | HalfSpaceTrees(...)`) → đổi thành `→`.
   - Khi chỉ có 1 engine trong `rq1.csv`, hình RQ1 hiện **1 điểm** — đúng như thiết kế (không bịa dữ liệu Spark), nhưng phải chờ đợt đo Spark mới có hình so sánh thật.
-- Chưa làm: vẫn **không có Docker CLI** trong phiên này nên chưa build/`docker compose up`; chưa có RQ1/RQ3 thật ⇒ hình `rq1_throughput_latency` mới 1 điểm và `rq3_fault_recovery` chưa sinh (đã kiểm tra bằng `--demo`/`--check`).
+- Chưa làm: vẫn **không có Docker CLI** trong phiên này nên chưa build/`docker compose up`; chưa có RQ1/RQ3 thật ⇒ hình `rq1_throughput_latency` mới 1 điểm và `rq3_fault_recovery` chưa sinh (đã kiểm tra bằng `--demo`/`--check`). *(nay đã khắc phục: Docker chạy được trên máy B — xem `docs/handover_B.md` mục 3.8)*
 
 
 

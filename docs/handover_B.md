@@ -3,11 +3,12 @@
 Người viết: B (Mẫn). Người nhận: A (Mai).
 Repo: https://github.com/thanhmai2403/p3-streaming — nhánh `b/data`, PR **#1** (`b/data` → `main`).
 
-**Tóm tắt:**
-- Đã xong **100% Ưu tiên 0, Ưu tiên 1** (handover_A mục 4) và thêm SOTA **Half-Space Trees**. Đã merge `origin/main` của A vào `b/data` và mở PR #1.
-- **Cổng tương đương đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu, `max_diff = 0.00e+00` (`score_mismatch = 0`). So theo **tập (`seq`, `detector`) của riêng bản ghi `alert`**, đúng README mục 9 — không so số lượng.
-- **Đã chấm xong** `results/summary/rq2_offline_quality.csv` cho cả 4 phương pháp: `hst` F1 **0,4476** > `zscore` 0,3642 > `ewma` 0,3244 > `mp` 0,0635. MP thấp do **tham số** của A (mục 2.3), không do bộ chấm.
-- **Chưa chạy được Docker trên máy B** trong phiên này (không có Docker CLI trong PATH) → các lệnh submit Flink/Spark trong `run_experiment.sh` mới chỉ được kiểm tra cú pháp (`bash -n`), **chưa có số liệu RQ1/RQ3 của Spark**. Đây là việc đầu tiên cần làm khi Docker chạy lại (mục 6).
+**Tóm tắt (cập nhật 25/10/2026, sau khi chạy thử trên máy B):**
+- Đã xong **Ưu tiên 0, Ưu tiên 1** (handover_A mục 4) và thêm SOTA **Half-Space Trees**. PR **#1** (`b/data` → `main`).
+- **Tương đương qua file đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu (`max_diff = 0.00e+00`), so theo tập (`seq`, `detector`) đúng README mục 9. **Tương đương qua Kafka thật (`rq0`) đang chạy, chưa có kết quả** — chưa được coi là qua cổng; chưa so với Flink; chưa kiểm tra nhiều micro-batch và dữ liệu trễ cho Spark.
+- **Bảng chất lượng đã chấm lại trên toàn bộ 19 568 mẫu** (bản cũ chấm baseline trên `equiv_10k` nên Recall bị thấp giả). F1: `hst` 0,4476 ≈ `zscore` 0,4306 > `ewma` 0,3398 > `mp` 0,0635. HST và z-score chênh chỉ 0,017 với 90 nhãn, một lần chạy, nên **chưa kết luận hơn kém**.
+- **Máy B không đủ làm máy đo RQ1/RQ3** (mục 3.5): RAM máy 14,176 MB, WSL tối đa 8,7 GB, cấu hình đo cần ~11,2 GB. Đề xuất máy A là máy đo (mục 4.1). Máy B chạy `rq0`, `rq2` với `docker-compose.lowmem.yml`.
+- Docker đã chạy được trên máy B (WSL integration bật qua `settings-store.json`). Chưa có số liệu RQ1/RQ3 của Spark.
 
 ---
 
@@ -67,35 +68,32 @@ Quy tắc gộp giờ đã được ghi chi tiết vào **README 7.1** (commit n
 
 ### 2.2 Bảng chấm SOTA / baseline — `results/summary/rq2_offline_quality.csv`
 
-Cùng một bộ chấm (`measure/measure_quality.py`, cửa sổ `[start, end + 1 h]` trên `labels.csv` 90 nhãn):
+Cùng một bộ chấm (`measure/measure_quality.py`, cửa sổ `[start_ms, end_ms + 1 h]`, `labels.csv` 90 nhãn). **Mọi phương pháp chạy trên cùng toàn bộ 19 568 mẫu** (`openaq_hn_injected.parquet`; `ref_alerts_full.jsonl` cho z-score và EWMA):
 
 | engine | detector | alert | alert trong cửa sổ | phát hiện | Precision | Recall | F1 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `offline` | `hst` (SOTA của B) | 116 | 85 | 29/90 | **0,7328** | 0,3222 | **0,4476** |
-| `offline` | `zscore` (bản tham chiếu) | 348 | 101 | 44/90 | 0,2902 | 0,4889 | 0,3642 |
-| `offline` | `ewma` (bản tham chiếu) | 411 | 92 | 53/90 | 0,2238 | **0,5889** | 0,3244 |
+| `offline` | `zscore` (bản tham chiếu) | 589 | 168 | 79/90 | 0,2852 | 0,8778 | 0,4306 |
+| `offline` | `ewma` (bản tham chiếu) | 767 | 157 | 90/90 | 0,2047 | **1,0000** | 0,3398 |
 | `offline` | `mp` (SOTA của A) | 162 | 8 | 8/90 | 0,0494 | 0,0889 | 0,0635 |
 
 Đọc bảng:
-- **HST** là phương pháp có Precision cao nhất (0,7328): 85/116 alert rơi đúng cửa sổ, nhưng chỉ bắt được 29/90 bất thường. Đây là đánh đổi hợp lý của mô hình bán giám sát dựa trên ngưỡng phân vị.
-- **EWMA** có Recall cao nhất (0,5889) nhưng Precision thấp nhất trong nhóm streaming vì EWMA phản ứng với cả `level_shift` dài (phát alert lặp trên toàn đoạn).
-- **HST ra đúng số của lần chấm trước** (0,7328 / 0,3222 / 0,4476) sau khi merge ⇒ merge **không** làm lệch cách chấm. Đây là kiểm tra hồi quy cho `measure_quality.py`.
-- Cả 4 dòng đều `has_recv_ts_ms = False` nên cột `detection_delay_*` để trống: SOTA chạy offline, không có giờ máy lúc nhận. Với dòng của streaming, cột này sẽ có số.
+- **HST** báo ít nhưng đúng (P cao nhất), bỏ sót nhiều (R thấp). **z-score** cân bằng. **EWMA** bắt đủ 90/90 nhưng báo thừa nhiều nhất.
+- F1 của HST và z-score chỉ chênh 0,017; với 90 nhãn và một lần chạy xác định, nên nói **tương đương F1, khác hồ sơ đánh đổi**, không nói HST tốt hơn.
+- Precision đếm theo **alert**, không theo sự kiện: bất thường dài (drift 24-48 mẫu) có thể sinh nhiều alert liên tiếp nên P của detector "bật liên tục" bị thổi lên. MP có bỏ 24 mẫu sau mỗi alert (`sota.mp.refractory`) nên điều kiện không hoàn toàn giống nhau.
+- Cả 4 dòng đều `has_recv_ts_ms = False` nên cột `detection_delay_*` để trống (SOTA offline). Dòng streaming sẽ có số khi chạy `rq2` qua Kafka.
+- Lưu ý khi chấm: **không** chấm baseline trên `equiv_10k.parquet` (chỉ 10 000 mẫu đầu) với đủ 90 nhãn — nhãn nằm ngoài phần đó bị tính là bỏ sót. `equiv_10k` chỉ dùng để so Flink với Spark.
 
-### 2.3 Vì sao Matrix Profile của A ra F1 = 0,0635 (cần A quyết)
+### 2.3 Vì sao Matrix Profile của A ra F1 = 0,0635 (A quyết)
 
-Đây **không phải** lỗi bộ chấm. Bằng chứng:
+Đây **không phải** lỗi bộ chấm:
 
-1. **Số alert không ít** (162) nhưng chỉ **8** rơi vào cửa sổ nhãn, tức alert nằm ở chỗ khác chứ không phải bị mất.
-2. **Lệch thời điểm**: trung vị khoảng cách từ alert tới `start_ms` của nhãn là **123 giờ trước nhãn**; chỉ **19/90** nhãn có alert trong 24 giờ trước `start_ms`. MP đang phát alert ở các *discord tự nhiên* của PM2.5 chứ không ở chỗ B chèn bất thường.
-3. **Ngưỡng quá thấp so với phân bố thật**: `sota.calib_fraction = 0,2` + `sota.threshold_quantile = 0,99` ⇒ ngưỡng lấy trên 20 % dữ liệu **đầu năm** (mùa khô, PM2.5 nền cao): `hn_01` 3,87 / `hn_02` 2,96 / `hn_03` 3,42. Sang mùa mưa (nền thấp) và các đoạn `level_shift` dài, khoảng cách matrix profile vượt ngưỡng liên tục ⇒ alert dồn về mùa khô + các đoạn nhiễu.
-4. **`refractory = 24`** chỉ bỏ 24 mẫu sau mỗi alert, trong khi `level_shift` dài tới 24 mẫu và `drift` tới 48 mẫu ⇒ một đoạn bất thường dài vẫn sinh nhiều alert liên tiếp.
+1. **Số alert không ít** (162) nhưng chỉ **8** rơi vào cửa sổ nhãn: alert nằm ở chỗ khác chứ không bị mất.
+2. **Lệch thời điểm**: trung vị khoảng cách từ alert tới `start_ms` nhãn là 123 giờ trước nhãn; chỉ 19/90 nhãn có alert trong 24 giờ trước `start_ms`. MP đang báo ở các *discord tự nhiên* của PM2.5.
+3. **Ngưỡng** lấy phân vị 99% trên 20% dữ liệu đầu (`sota.calib_fraction = 0,2`, `sota.threshold_quantile = 0,99`), có thể không bám được phân bố ở mùa khác.
+4. `refractory = 24` chỉ bỏ 24 mẫu sau mỗi alert, ngắn hơn đoạn drift (tới 48 mẫu).
 
-Gợi ý tinh chỉnh (A quyết, B không đổi tham số của A):
-- Hạ `threshold_quantile` xuống 0,95–0,97, hoặc calibrate trên **50 % dữ liệu đầu** để ngưỡng bám được cả mùa mưa.
-- Chạy thêm `--causal` (`stumpi`) rồi so — bản offline dùng tương lai nên `level_shift` dài bị "coi là bình thường" ở phần đầu đoạn.
-- Chạy ablation `--no-normalize` để xem z-normalize có làm mất biên độ bất thường không.
-- Nếu vẫn thấp: dùng MP như **feature** (khoảng cách) thay vì ngưỡng cứng, hoặc gộp alert theo cụm thời gian trước khi chấm.
+Gợi ý (A quyết, B không đổi tham số của A): thử `--causal` (stumpi) và `--no-normalize` để so sánh. **Không chỉnh ngưỡng dựa trên `labels.csv`** để tăng F1 (như vậy là học thuộc đề); nếu đổi quy tắc ngưỡng thì áp dụng cùng cách cho HST và ghi vào Giới hạn.
 
 ---
 
@@ -103,14 +101,14 @@ Gợi ý tinh chỉnh (A quyết, B không đổi tham số của A):
 
 ### 3.1 Cặp `pandas==2.2.3` + `pyarrow==19.0.0` cho PySpark 4.1.3
 
-`pandas 3.1.0` + `pyarrow 26` (bản pip cài mới nhất lúc đó) **làm chết pandas UDF** của Spark 4.1.3:
+PySpark 4.1.3 + **`pyarrow 26`** làm chết pandas UDF của Spark (`applyInPandasWithState`):
 
 ```
 TypeError: 'float' object cannot be interpreted as an integer
   at pyarrow.lib.RecordBatch.slice (worker pandas UDF)
 ```
 
-Hạ về **pandas 2.2.3 + pyarrow 19.0.0** (đúng cặp trong `docker/Dockerfile.spark`) thì chạy ổn định. Đã ghim trong `requirements.txt` kèm ghi chú; **đừng nâng cấp** hai gói này khi chưa thử lại UDF.
+Đã kiểm chứng riêng: `pandas 3.1.0 + pyarrow 26` lỗi, `pandas 2.3.3 + pyarrow 26` lỗi, `pandas 2.3.3 + pyarrow 21` và `pandas 3.1.0 + pyarrow 21` chạy đúng ⇒ **thủ phạm là pyarrow 26**, không phải pandas 3. Nhóm chọn cặp `pandas 2.2.3 + pyarrow 19.0.0` (khớp `docker/Dockerfile.spark`). **Đừng nâng cấp hai gói này khi chưa thử lại UDF.** Cần thêm: worker phải dùng đúng Python có pyarrow (`PYSPARK_PYTHON`), nếu không báo `No module named 'pyarrow'`.
 
 ### 3.2 `pyarrow 19` không đọc được parquet do JVM (Spark) ghi
 
@@ -132,19 +130,19 @@ Bản `measure_quality.py` đầu tiên dedupe theo `["engine", "detector", "seq
 
 Thêm: file source streaming **không tự suy schema** (`Schema must be specified...`) → phải truyền `schema=` tường minh (đúng như `--test-parquet-spark` làm).
 
-### 3.5 Thông số máy B (để A chốt máy đo) và **cảnh báo RAM**
+### 3.5 Thông số máy B và vì sao **không** làm máy đo
 
 | | Máy B |
 | --- | --- |
-| CPU | AMD Ryzen 5 5600U — **6 core vật lý / 12 luồng** |
-| RAM | **13,84 GB** |
+| CPU | AMD Ryzen 5 5600U (theo Cline), WSL `nproc = 12` (chưa giới hạn) |
+| RAM | **14 176 MB** (`systeminfo`) |
 | OS | Windows 11 Home + WSL2 Ubuntu |
-| Trong WSL2 | `nproc = 8`, `MemTotal = 9 154 240 kB ≈ 8,73 GiB` (chưa có `.wslconfig` riêng) |
-| Docker | Docker Desktop (đang Stop trong phiên này) |
+| Giới hạn WSL (`.wslconfig`) | `memory=9GB`, `processors=8`, `swap=4GB` → `MemTotal` ≈ **8,7 GiB** |
+| Docker | Docker Desktop + Engine + Compose v2 (giao diện không mở được, dùng qua terminal trong WSL) |
 
-**Cảnh báo:** compose hiện tại cần Kafka `2 CPU / 3 GB` + engine `4 CPU / (1,2 + 2×3,5 GB)` ≈ **11,2 GB**, **vượt** RAM WSL (8,73 GB) ⇒ container sẽ bị OOM-kill giữa run. Trước khi chạy RQ1/RQ3 phải làm **một trong hai**:
-- tăng `memory=` trong `%UserProfile%\.wslconfig` lên `10GB`–`11GB` (máy có 13,84 GB) rồi `wsl --shutdown`; hoặc
-- hạ Kafka xuống `1,5–2 GB` (`mem_limit`, `KAFKA_HEAP_OPTS`) — cách này **thay đổi môi trường đo**, phải ghi vào báo cáo.
+Cấu hình đo trong `docker-compose.yml` (Kafka 3 GB + engine 1,2 + 2×3,5 GB) cần **~11,2 GB** cho RAM container. WSL máy B đã chốt `memory=9GB` (không nâng lên 10-11 GB, vì khi đó Windows, Docker Desktop và VS Code chỉ còn ~3 GB; RAM bị ép làm container bị kill hoặc làm méo độ trễ). Vì vậy **máy B không làm máy đo RQ1/RQ3**.
+
+Máy B dùng `docker-compose.lowmem.yml` (Kafka 1,5 GB, mỗi engine ~5,4 GB, tổng ~6,9 GB) **chỉ cho `rq0` (tương đương) và `rq2` (chất lượng)**. Số liệu chạy với override này **không dùng để so sánh hiệu năng** (RQ1/RQ3). Khi chạy Spark với override phải đặt `SPARK_EXECUTOR_MEMORY=1024m SPARK_DRIVER_MEMORY=512m` (driver 512m trong `mem_limit` 1300m của `spark-master`) và `COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`.
 
 ### 3.6 Ba bẫy bash khi viết `run_experiment.sh`
 
@@ -152,9 +150,21 @@ Thêm: file source streaming **không tự suy schema** (`Schema must be specifi
 2. **CRLF**: repo đặt `core.autocrlf=true` nên file `.sh` trong working tree là CRLF; blob trong git là LF. Trong WSL phải chạy bản từ `git show` hoặc bật `git config core.autocrlf input` cho repo. Kiểm tra: `git show HEAD:scripts/run_experiment.sh | file -`.
 3. **`docker compose stop`** engine kia phải chạy **trước** `up -d` engine mình, nếu không 2 engine cùng chiếm 4 core ⇒ mọi so sánh vô nghĩa (script đã làm đúng thứ tự này).
 
-### 3.7 `measure_quality.py`: detection delay không cần `sent.csv`
+### 3.7 `measure_quality.py`: định nghĩa detection delay đang khác README 10.2
 
-`ingest_ts_ms` đã được engine **chép nguyên** vào bản ghi alert (README 5.2) nên `recv_ts_ms − ingest_ts_ms` tính được ngay từ `alerts.jsonl` + `recv_ts_ms` do `measure_perf.py` gắn. `sent.csv` của producer là thống kê **theo giây** (không phải từng sự kiện) nên **không dùng được** cho mục đích này — `--sent` chỉ còn là nguồn dự phòng cho dữ liệu cũ.
+README 10.2: delay = `recv_ts_ms` của alert đầu tiên trong cửa sổ − `ingest_ts_ms` của **mẫu bất thường đầu tiên**.
+Bản hiện tại dùng `ingest_ts_ms` **chép sẵn trong chính alert** (mẫu bị báo), nên không phải mẫu bất thường đầu tiên. Khi so Flink với Spark thì chênh lệch giữa hai engine vẫn đúng (cùng một cách tính), nhưng đây là độ trễ xử lý alert, không phải toàn bộ độ trễ phát hiện. **Phải ghi rõ điều này trong báo cáo**, hoặc thêm file `sent_events.csv` (`station_id,event_time_ms,ingest_ts_ms`) từ producer replay để tính đúng định nghĩa. `sent.csv` hiện tại là thống kê theo giây, không dùng được cho mục đích này.
+
+### 3.8 Lỗi môi trường gặp khi chạy lần đầu trên máy B (A có thể gặp lại)
+
+| Lỗi | Nguyên nhân và cách xử |
+| --- | --- |
+| Container Spark thoát ngay `Exited (0)` | Image `apache/spark` không có `CMD`; compose phải khai báo `command` chạy `spark-class ...Master` / `...Worker` ở nền trước (đã sửa trong `docker-compose.yml`) |
+| `spark-submit --packages` báo `/nonexistent/.ivy2.5.2/cache` | Người dùng `spark` có HOME không tồn tại: thêm `--conf spark.jars.ivy=/tmp/.ivy2` |
+| `check_clock.sh` báo lệch hàng nghìn tỉ ms | `date +%s%3N` trên Ubuntu mới in 19 chữ số (nano giây); dùng `$(( $(date -u +%s%N) / 1000000 ))`. Script đã sửa |
+| `check_clock.sh` báo lệch ~100 ms dù đồng hồ đúng | Sai số đo (`docker compose exec` chậm) lớn hơn độ lệch; đã sửa tiêu chí: FAIL chỉ khi `|lệch| − sai số > ngưỡng`, lấy 5 mẫu tốt nhất |
+| `pip install` `pandas==2.2.3` biên dịch lỗi | Python hệ thống của Ubuntu là 3.14, chưa có bản cài sẵn: tạo venv Python 3.11 bằng `uv venv --python 3.11` |
+| `docker` không có trong Ubuntu | Bật WSL integration trong Docker Desktop (hoặc `EnableIntegrationWithDefaultWslDistro` + `IntegratedWslDistros` trong `settings-store.json`) rồi `wsl --shutdown` |
 
 ---
 
@@ -162,15 +172,9 @@ Thêm: file source streaming **không tự suy schema** (`Schema must be specifi
 
 ### 4.1 Máy nào là máy đo?
 
-**Đề xuất: máy B** — nhưng cần A xác nhận, vì B không biết cấu hình máy A.
+**Đề xuất: máy A (Mai), nếu máy A có đủ RAM.** Máy B không đủ (mục 3.5). A vui lòng gửi `nproc` và `free -h` chạy trong WSL của máy A (cần ~12 GB RAM cho WSL, 8 core trở lên) để chốt.
 
-| Lý do chọn máy B | Số liệu |
-| --- | --- |
-| CPU đủ cho 4 core engine + Kafka + producer/measure | Ryzen 5 5600U, 6 core / 12 luồng, WSL `nproc = 8` |
-| RAM đủ **sau khi** tăng WSL | 13,84 GB → đặt WSL 10–11 GB (compose cần ~11,2 GB) |
-| Đã có sẵn code + dữ liệu + nhãn của B | không phải copy parquet 2 chiều |
-
-**Quy tắc bắt buộc** (đề nghị ghi vào báo cáo): cả Flink và Spark chạy **cùng một máy, cùng một phiên Docker**, cùng giới hạn CPU/RAM. Nếu A chọn máy A thì B **không** tự chạy RQ1/RQ3, chỉ chạy `rq0` (kiểm tra tương đương) và `rq2` (chất lượng) trên máy B, vì `rq2` offline không phụ thuộc máy đo.
+**Quy tắc bắt buộc** (ghi vào báo cáo): cả Flink và Spark chạy **cùng một máy, cùng một phiên Docker, cùng giới hạn CPU/RAM** cho RQ1/RQ3. Máy B chạy `rq0` (tương đương), `rq2` (chất lượng; không phụ thuộc máy đo), phát triển và viết báo cáo, với `docker-compose.lowmem.yml`.
 
 ### 4.2 Chốt các mức tải RQ1
 
@@ -199,11 +203,11 @@ Thêm: file source streaming **không tự suy schema** (`Schema must be specifi
 | 2.5 Chế độ `replay` của A | **Đã thay bằng bản của B** (chia trạm theo `station_index % n_producers`, `--bootstrap-servers` là bí danh của `--bootstrap`, `--dry-run --output`), giữ nguyên ngữ nghĩa `--late-shift a b` của A. Lý do: bản của A không chia trạm được nên khi chạy nhiều producer, `seq` của một trạm có thể không tăng theo thứ tự đến |
 | 2.6 Tên run `rq0_<engine>_equiv_r<n>` | **Đồng ý**, `parse_run_id` của A nhận đúng |
 
-### 4.5 Nếu máy B là máy đo: B có chạy RQ1/RQ3 phía Flink bằng script của A không? B có viết nháp Thảo luận không?
+### 4.5 Phân việc khi máy A là máy đo
 
-**Có, cả hai.** `scripts/run_experiment.sh` đã hỗ trợ `flink` và `spark` với cùng 7 bước (B viết lại theo handover mục 4), nên B chạy được Flink mà không phải sửa gì thêm — chỉ cần A xác nhận **mức tải** (4.2) và **thứ tự chạy** (đề nghị: `rq0` → `rq2` → `rq1` → `rq3`).
-
-Nháp phần Thảo luận/Giới hạn của B đã có trong **`docs/report_B_draft.md`** (mục 8 và 9), trong đó ghi sẵn luận điểm quan trọng: kết quả "Flink có thông lượng cao nhất" của ShuffleBench là với **code Java**; với Python, PyFlink trả giá **cầu nối Java–Python ở từng bản ghi**, còn PySpark `applyInPandasWithState` xử lý theo **lô pandas**.
+- **A** chạy RQ1/RQ3 cho **cả hai engine** bằng `scripts/run_experiment.sh` (hỗ trợ `flink` và `spark`, cùng 7 bước), dùng các mức tải A chốt và thứ tự `rq0` → `rq2` → `rq1` → `rq3`.
+- **B** chạy `rq0` và `rq2` trên máy B (không cần đúng hạn mức tài nguyên), Half-Space Trees, và viết nháp Thảo luận/Giới hạn.
+- Nháp phần Thảo luận/Giới hạn của B trong **`docs/report_B_draft.md`** (mục 8 và 9): kết quả "Flink có thông lượng cao nhất" của ShuffleBench là với **code Java**; với Python, PyFlink trả giá **cầu nối Java–Python ở từng bản ghi**, còn PySpark `applyInPandasWithState` xử lý theo **lô pandas**.
 
 ---
 
@@ -250,14 +254,12 @@ docker compose exec spark-master ls /checkpoints/spark/<run_id>   # checkpoint R
 
 ## 6. Việc B làm tiếp (theo thứ tự)
 
-1. **Tăng RAM WSL** lên 10–11 GB (`.wslconfig`) rồi `wsl --shutdown`; build `p3-spark:4.1.3` và `docker compose up` **lần đầu** (chưa từng chạy trên máy này).
-2. Chạy `rq0 spark equiv 1` → phải ra `TƯƠNG ĐƯƠNG 759/759` **qua Kafka thật** (hiện mới kiểm tra bằng file source).
-3. Chạy `rq2 spark replay 1` → điền dòng `spark` vào `results/summary/rq2.csv` và bảng chất lượng streaming.
-4. Chạy `rq1` / `rq3` cho Spark theo mức tải A chốt, 3 lần lặp, **chỉ giữ run `clock_ok = true`**.
-5. Chạy `scripts/plot_results.py` sau mỗi đợt để hình luôn khớp số mới.
-6. Viết tiếp `docs/report_B_draft.md` khi có số RQ1/RQ3 thật.
+1. Chạy `rq0 spark equiv 1` qua Kafka thật, với `docker-compose.lowmem.yml` (`COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`). Kết quả phải ra `TƯƠNG ĐƯƠNG 759/759`.
+2. Chạy `rq0 flink equiv 1` (hoặc nhờ A) và so **ba bên**: tham chiếu = Flink = Spark.
+3. Kiểm tra Spark với **nhiều micro-batch** (`maxFilesPerTrigger=1`, ~20 file) và với **dữ liệu trễ** (`late_dropped > 0`, bằng với bản tham chiếu).
+4. Chạy `rq2 spark replay 1` và `rq2 flink replay 1` trên máy B (điền `results/summary/rq2.csv`).
+5. Trả lời A về máy đo; nếu máy A đo thì B gửi A `scripts/run_experiment.sh` mới nhất và `docker-compose.lowmem.yml` chỉ để tham khảo.
+6. Chạy `scripts/plot_results.py` sau mỗi đợt; viết tiếp `docs/report_B_draft.md`.
 
-**A cần biết:** (a) `requirements-b.txt` đã **xóa**, chỉ dùng `requirements.txt`; (b) MP cần A tinh chỉnh tham số (mục 2.3); (c) PR #1 chứa toàn bộ thay đổi trong commit này.
-
-
+**A cần biết:** (a) `requirements-b.txt` đã xóa, chỉ dùng `requirements.txt`; (b) tham số MP cần A tinh chỉnh (mục 2.3), không dựa trên nhãn; (c) PR #1 chứa toàn bộ thay đổi; (d) mục 3.8 liệt kê các lỗi môi trường có thể gặp lại.
 

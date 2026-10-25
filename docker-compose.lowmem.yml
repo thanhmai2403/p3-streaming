@@ -1,0 +1,104 @@
+# docker-compose.lowmem.yml - OVERRIDE của docker-compose.yml cho MÁY B (WSL2 có MemTotal ≈ 8,73 GiB,
+# xem docs/handover_B.md mục 3.5). Không sửa docker-compose.yml; mọi thứ ở đây chỉ ĐÈ lên phần RAM.
+#
+# *** CHỈ DÙNG CHO CÁC RUN CHẤT LƯỢNG / TƯƠNG ĐƯƠNG (RQ0, RQ2) ***
+# *** KHÔNG dùng cho RQ1/RQ3 (đo hiệu năng/thông lượng/độ trễ) vì hạ RAM là THAY ĐỔI MÔI TRƯỜNG ĐO,
+#     số liệu sẽ không so sánh được với máy A. Muốn chạy RQ1/RQ3 thì phải nâng RAM WSL hoặc dùng
+#     docker-compose.yml gốc. ***
+#     (quality / equivalence runs only - NOT for RQ1/RQ3 performance runs)
+#
+# Cách dùng (thêm -f cho MỌI lệnh compose: up, ps, logs, exec, stop...):
+#   docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d
+#
+# Ngân sách RAM của override (vẫn MỖI LẦN CHỈ BẬT MỘT ENGINE như quy ước trong docker-compose.yml):
+#   kafka 1,5 GB + engine (Flink 1,0 GB; Spark 1,3 GB vì spark-master mem_limit = 1300m) + 2 x 2,2 GB (xử lý)
+#   -> tổng 6,9 GB (Flink) / 7,2 GB (Spark); còn ~1,5-1,8 GB trong 8,73 GiB của WSL cho Docker Desktop
+#      + producer/measure chạy trên host.
+# CPU GIỮ NGUYÊN 100%: file này KHÔNG khai báo `cpus` nên Compose giữ giá trị của docker-compose.yml
+#   (kafka 2 · jm/master 0,5 · mỗi tm/worker 2 -> engine vẫn đúng 4 core xử lý).
+# RAM "phần xử lý" của hai engine KHÔNG còn bằng nhau: Flink 1536m (taskmanager.memory.process.size)
+#   vs Spark 1280m (SPARK_WORKER_MEMORY) -> run RQ0/RQ2 vẫn tương đương về logic, nhưng phải ghi rõ
+#   chênh lệch này khi báo cáo. (Spark hạ xuống 1280m để đủ chỗ cho worker daemon 384m trong 2,2 GB.)
+
+# FLINK_PROPERTIES là MỘT chuỗi nhiều dòng: `environment` merge theo TỪNG KEY, nên khai báo key này
+# trong file override sẽ THAY THẾ nguyên khối của docker-compose.yml -> phải chép lại ĐỦ 14 dòng,
+# chỉ hạ 2 dòng memory:
+#   jobmanager.memory.process.size : 1024m -> 768m  (vừa mem_limit 1000m, chừa ~230m cho JVM/native
+#                                                   nằm ngoài phần Flink tính toán)
+#   taskmanager.memory.process.size: 3072m -> 1536m (vừa mem_limit 2200m, chừa ~660m cho Python
+#                                                   thread-mode + RocksDB native ngoài managed memory)
+x-flink-lowmem: &flink-lowmem
+  FLINK_PROPERTIES: |
+    jobmanager.rpc.address: flink-jobmanager
+    taskmanager.numberOfTaskSlots: 2
+    parallelism.default: 4
+    jobmanager.memory.process.size: 768m
+    taskmanager.memory.process.size: 1536m
+    state.backend.type: rocksdb
+    execution.checkpointing.dir: file:///checkpoints/flink
+    restart-strategy.type: fixed-delay
+    restart-strategy.fixed-delay.attempts: 1000
+    restart-strategy.fixed-delay.delay: 2 s
+    python.executable: /usr/local/bin/python3
+    python.client.executable: /usr/local/bin/python3
+    python.execution-mode: thread
+
+services:
+  kafka:
+    environment:
+      # 768m heap; phần còn lại của 1,5 GB cho metaspace, direct buffer và page cache của broker.
+      KAFKA_HEAP_OPTS: "-Xms768m -Xmx768m"
+    mem_limit: 1500m
+
+  flink-jobmanager:
+    environment:
+      <<: *flink-lowmem
+    mem_limit: 1000m
+
+  # Số slot (2) và parallelism.default (4) giữ nguyên -> vẫn 2 x 2 slot = 4, chỉ hạ RAM.
+  flink-taskmanager-1:
+    environment:
+      <<: *flink-lowmem
+    mem_limit: 2200m
+
+  flink-taskmanager-2:
+    environment:
+      <<: *flink-lowmem
+    mem_limit: 2200m
+
+  # ---------------- Spark ----------------
+  # Master là JVM daemon, mặc định -Xmx1g (SparkClassCommandBuilder) -> phải hạ heap để còn chỗ cho
+  # driver chạy cùng container: 256m daemon + driver 512m nằm gọn trong mem_limit 1300m
+  # (run_experiment.sh: SPARK_DRIVER_MEMORY, mặc định 600m -> PHẢI đặt 512m khi dùng override này).
+  spark-master:
+    environment:
+      SPARK_DAEMON_MEMORY: 256m
+    mem_limit: 1300m
+
+  # 1280m là RAM worker QUẢNG CÁO cho master để cấp executor; 2,2 GB còn ~920m cho worker daemon
+  # (384m heap + JVM overhead) và Python/pandas UDF chạy trong tiến trình executor.
+  spark-worker-1:
+    environment:
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 1280m
+      SPARK_DAEMON_MEMORY: 384m
+    mem_limit: 2200m
+
+  spark-worker-2:
+    environment:
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 1280m
+      SPARK_DAEMON_MEMORY: 384m
+    mem_limit: 2200m
+
+# LƯU Ý BẮT BUỘC KHI CHẠY SPARK VỚI OVERRIDE NÀY:
+#   scripts/run_experiment.sh lấy executor/driver memory từ SPARK_EXECUTOR_MEMORY (mặc định 2400m) và
+#   SPARK_DRIVER_MEMORY (mặc định 600m). Spark standalone chỉ cấp executor khi spark.executor.memory
+#   <= SPARK_WORKER_MEMORY, nên với 1280m job sẽ KHÔNG được cấp executor (treo ở bước chờ job chạy).
+#   Vì vậy khi dùng override này PHẢI đặt:
+#     SPARK_EXECUTOR_MEMORY <= 1280m  (khuyến nghị 1024m: 1024 + 384 daemon + Python vẫn nằm trong 2,2 GB)
+#     SPARK_DRIVER_MEMORY   = 512m    (driver chạy chung container với spark-master, mem_limit 1300m;
+#                                      256m daemon + 512m driver + JVM overhead vẫn nằm trong 1300m)
+#   Ví dụ:
+#     SPARK_EXECUTOR_MEMORY=1024m SPARK_DRIVER_MEMORY=512m \
+#       bash scripts/run_experiment.sh rq0 spark equiv 1

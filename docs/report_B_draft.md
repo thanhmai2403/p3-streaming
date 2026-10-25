@@ -187,7 +187,7 @@ Profile bị gộp còn 1 dòng. Khoá đúng là
 | Python | 3.11 | giống nhau ở container và máy chạy script |
 | pandas / pyarrow | **2.2.3 / 19.0.0** | cặp đã kiểm chứng với pandas UDF của Spark 4.1.3 |
 | `river` / `stumpy` | 0.26.1 / 1.14.1 | HST và Matrix Profile |
-| Máy đo | AMD Ryzen 5 5600U, **6 core / 12 luồng**, 13,84 GB RAM | Windows 11 + WSL2 Ubuntu; Docker Desktop; trong WSL `nproc = 8`, `MemTotal ≈ 8,73 GiB` |
+| Máy B (chạy RQ0/RQ2, **không** phải máy đo RQ1/RQ3) | AMD Ryzen 5 5600U, **6 core / 12 luồng**, 13,84 GB RAM | Windows 11 + WSL2 Ubuntu; Docker Desktop; trong WSL `nproc = 8`, `MemTotal ≈ 8,73 GiB` (`.wslconfig`: `memory=9GB`, `processors=8`, `swap=4GB`) |
 
 ### 5.2 Các biện pháp giữ công bằng tuyệt đối giữa hai engine
 
