@@ -1,265 +1,311 @@
 #!/usr/bin/env bash
-# run_experiment.sh – chạy MỘT lần thí nghiệm cho engine Spark (README mục 10.1).
+# run_experiment.sh – chạy MỘT lần thí nghiệm theo đúng luồng của A (docs/handover_A.md, Ưu tiên 1).
 #
-# Sáu bước: (1) dừng engine còn lại, (2) xóa/tạo lại topic + xóa checkpoint,
-# (3) bật job + measure + docker stats, (4) chờ job RUNNING trên Spark master UI,
-# (5) chạy producer: 30s warm-up + 180s đo (rate) hoặc replay tới hết,
-# (6) lưu kết quả vào results/raw/<run_id>/ và thêm 1 dòng CSV vào
-#     results/summary/<rq>.csv.
+#   bash scripts/run_experiment.sh <rq> <engine> <config> <lần>
 #
-# Chạy từ Git Bash / WSL. Ví dụ:
-#   RUN_ID=rq1_spark_replay_r1 CONFIG=replay bash scripts/run_experiment.sh
-#   RUN_ID=rq2_spark_rate_r1  CONFIG=rate   bash scripts/run_experiment.sh
-#   RUN_ID=rq3_spark_rate_r1  CONFIG=rate RQ3_KILL_WORKER_S=60 bash scripts/run_experiment.sh
+#   rq     : rq0 (cổng tương đương) | rq1 (thông lượng/độ trễ) | rq2 (chất lượng, replay OpenAQ)
+#            | rq3 (chịu lỗi, kill 1 worker)
+#   engine : flink | spark
+#   config : nhãn cấu hình, đưa thẳng vào run_id (README 10.4: <rq>_<engine>_<config>_r<lần>)
+#            vd rate2000, rate4000, replay, equiv
+#   lần    : số nguyên (1, 2, 3...)
 #
-# Yêu cầu trước khi chạy:
-#   - docker compose up -d --build   (Spark master + 2 worker trong docker-compose.yml)
-#   - Kafka của Thành viên A đang chạy và thấy nhau qua network p3-net:
-#       docker network connect p3-net <kafka-container>
-#   - Producer: mặc định chạy trong Docker (PRODUCER_IMAGE), hoặc PRODUCER_MODE=host
-#     để chạy producer.py ngay trên máy (mode replay, do B viết).
+# Ví dụ:
+#   bash scripts/run_experiment.sh rq1 flink rate2000 1
+#   bash scripts/run_experiment.sh rq1 spark rate4000 2
+#   bash scripts/run_experiment.sh rq0 flink equiv 1
+#   bash scripts/run_experiment.sh rq2 spark replay 1
+#   bash scripts/run_experiment.sh rq3 spark rate2000 1              # kill ở giây 60
+#   DELIVERY=EXACTLY_ONCE bash scripts/run_experiment.sh rq3 flink rate2000 4
+#
+# 7 bước (handover_A mục 4, Ưu tiên 1):
+#   1. `bash scripts/check_clock.sh` – lệch thì dừng ngay (số đo độ trễ sẽ vô nghĩa).
+#   2. Dừng engine còn lại, `bash scripts/create_topics.sh`, xóa checkpoint của run_id này.
+#   3. Submit job: Flink `flink run -d -py /opt/p3/flink_job/job.py`; Spark `spark-submit` qua
+#      spark-master (standalone, 2 worker × 2 core = 4 core, giống Flink).
+#   4. `measure/measure_perf.py collect --docker-stats` chạy nền (gắn recv_ts_ms).
+#   5. `producer/producer.py`: rq1/rq3 `--mode rate`; rq0 replay equiv_10k; rq2 replay OpenAQ
+#      + `--late-fraction 0.05 --late-shift 1 4`.
+#   6. rq3: ở giây KILL_AT_S giết 1 worker (`docker kill`) rồi start lại, ghi `kill_ts_ms`
+#      (epoch ms) vào results/raw/<run_id>/meta.json -> summarize tự tính thời gian phục hồi.
+#   7. Hủy job, `measure_perf.py summarize` (+ `measure_quality.py` nếu rq2), rồi
+#      `check_clock.sh` lần cuối.
+#
+# Biến môi trường hay dùng: RATE, DURATION_S, PRODUCERS, KILL_AT_S, RESTART_AFTER_S, KILL_CT,
+# DELIVERY=EXACTLY_ONCE, REPLAY_FILE, REPLAY_SPEED, MAX_SECONDS, FORCE=1 (cho phép chạy lại
+# run_id đã có kết quả), WARMUP_S, DRAIN_S.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.yml")
 
-# ---- tham số (đều override được bằng biến môi trường) ----
-RUN_ID="${RUN_ID:-rq2_spark_replay_r1}"
-CONFIG="${CONFIG:-replay}"                     # replay | rate
-ENGINE="${ENGINE:-spark}"
-MASTER_URL="${MASTER_URL:-spark://spark-master:7077}"
-BROKERS="${BROKERS:-kafka:9092}"               # trong mạng docker
-HOST_BROKERS="${HOST_BROKERS:-localhost:29092}"
-SPARK_MASTER_UI="${SPARK_MASTER_UI:-http://localhost:8080}"
-OUT="${OUT:-$REPO_ROOT/results/raw/$RUN_ID}"
+usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^#\ \{0,1\}//'; }
+
+if [ $# -ne 4 ]; then
+  usage
+  echo "" >&2
+  echo "Thiếu tham số: cần đúng 4 (nhận $#)" >&2
+  exit 2
+fi
+RQ="$1"; ENGINE="$2"; CONFIG="$3"; REP="$4"
+
+case "$RQ" in
+  rq0|rq1|rq2|rq3) ;;
+  *) echo "rq phải là rq0|rq1|rq2|rq3 (nhận '$RQ')" >&2; exit 2 ;;
+esac
+case "$ENGINE" in
+  flink|spark) ;;
+  *) echo "engine phải là flink|spark (nhận '$ENGINE')" >&2; exit 2 ;;
+esac
+[[ "$CONFIG" =~ ^[a-z0-9]+([_-][a-z0-9]+)*$ ]] || {
+  echo "config chỉ gồm a-z, 0-9, '_' hoặc '-' (nhận '$CONFIG')" >&2; exit 2; }
+[[ "$REP" =~ ^[0-9]+$ ]] || { echo "lần phải là số nguyên (nhận '$REP')" >&2; exit 2; }
+
+RUN_ID="${RQ}_${ENGINE}_${CONFIG}_r${REP}"
+OUT="$REPO_ROOT/results/raw/$RUN_ID"
+
+# ---------- tham số (đều override được bằng biến môi trường) ----------
+RATE="${RATE:-}"
+if [ -z "$RATE" ] && [[ "$CONFIG" =~ ^rate([0-9]+) ]]; then RATE="${BASH_REMATCH[1]}"; fi
+RATE="${RATE:-2000}"                            # sự kiện/giây (tổng của mọi producer)
+DURATION_S="${DURATION_S:-210}"                 # 30 s warm-up + 180 s đo (config.yaml: measure)
+PRODUCERS="${PRODUCERS:-1}"                     # chia tải bằng --producer-id/--n-producers
 WARMUP_S="${WARMUP_S:-30}"
-MEASURE_S="${MEASURE_S:-180}"
+DRAIN_S="${DRAIN_S:-20}"                        # chờ alert cuối cùng
 WAIT_RUNNING_S="${WAIT_RUNNING_S:-180}"
-STOP_AFTER_IDLE_S="${STOP_AFTER_IDLE_S:-60}"
-DRAIN_S="${DRAIN_S:-30}"
-KAFKA_CT="${KAFKA_CT:-kafka}"
-KAFKA_TOPICS_BIN="${KAFKA_TOPICS_BIN:-kafka-topics.sh}"
-OTHER_ENGINE_CTS="${OTHER_ENGINE_CTS:-flink-jobmanager flink-taskmanager}"
-PRODUCER_MODE="${PRODUCER_MODE:-docker}"      # docker | host
-PRODUCER_IMAGE="${PRODUCER_IMAGE:-p3-producer:latest}"
-PRODUCER_CMD="${PRODUCER_CMD:-}"              # nếu đặt: chạy nguyên lệnh này (docker run --network p3-net)
-PRODUCER_FILE_HOST="${PRODUCER_FILE_HOST:-$REPO_ROOT/data/processed/openaq_hn_injected.parquet}"
-PRODUCER_ARGS_REPLAY="${PRODUCER_ARGS_REPLAY:---speed 500 --late-fraction 0.05 --late-shift 1 4 --seed 42}"
-RQ3_KILL_WORKER_S="${RQ3_KILL_WORKER_S:-}"    # vd 60 -> kill ở giây 60 của cửa sổ đo
-RQ3_KILL_WORKER_CT="${RQ3_KILL_WORKER_CT:-spark-worker-1}"
-RQ3_RESTART_AFTER_S="${RQ3_RESTART_AFTER_S:-10}"
+HOST_BROKERS="${HOST_BROKERS:-localhost:29092}" # producer/measure chạy trên host
+IN_BROKERS="${IN_BROKERS:-kafka:9092}"          # job trong mạng docker
+REPLAY_FILE="${REPLAY_FILE:-data/processed/openaq_hn_injected.parquet}"
+REPLAY_SPEED="${REPLAY_SPEED:-}"                 # rỗng: để producer.py tự quyết (rq2 không đặt)
+EQUIV_SPEED="${EQUIV_SPEED:-2000}"              # rq0: --speed khi phát lại equiv_10k
+KILL_AT_S="${KILL_AT_S:-60}"
+RESTART_AFTER_S="${RESTART_AFTER_S:-10}"
+DELIVERY="${DELIVERY:-AT_LEAST_ONCE}"           # EXACTLY_ONCE: chỉ Flink có cờ này
+LABELS="${LABELS:-data/processed/labels.csv}"
+SPARK_PACKAGES="${SPARK_PACKAGES:-org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3}"
+MASTER_URL="${MASTER_URL:-spark://spark-master:7077}"
 
-PY="$REPO_ROOT/.venv/Scripts/python.exe"
-[ -x "$PY" ] || PY=python
+case "$ENGINE" in
+  flink)
+    KILL_CT="${KILL_CT:-flink-tm1}"
+    OTHER_SVCS=(spark-master spark-worker-1 spark-worker-2)
+    MY_SVCS=(kafka flink-jobmanager flink-taskmanager-1 flink-taskmanager-2)
+    ;;
+  spark)
+    KILL_CT="${KILL_CT:-spark-worker-1}"
+    OTHER_SVCS=(flink-jobmanager flink-taskmanager-1 flink-taskmanager-2)
+    MY_SVCS=(kafka spark-master spark-worker-1 spark-worker-2)
+    ;;
+esac
 
-log() { echo "[run] $*" "$(date '+%H:%M:%S')"; }
-now_ms() { "$PY" -c "import time; print(time.time_ns()//1_000_000)"; }
-sleep_ms() { "$PY" -c "import time,sys; time.sleep(max(0,float(sys.argv[1])/1000))" "$1"; }
+if [ -x "$REPO_ROOT/.venv/bin/python" ]; then PY="$REPO_ROOT/.venv/bin/python"
+elif [ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]; then PY="$REPO_ROOT/.venv/Scripts/python.exe"
+else PY=python3; fi
 
+DC() { "${COMPOSE[@]}" "$@"; }
+log() { echo "[run] $(date '+%H:%M:%S') $*"; }
+die() { echo "[run] LỖI: $*" >&2; exit 1; }
+
+# ---------- kiểm tra môi trường ----------
+command -v docker >/dev/null 2>&1 || die "không có docker CLI trong PATH"
+docker compose version >/dev/null 2>&1 || die "không chạy được 'docker compose'"
+[ -f "$REPO_ROOT/config.yaml" ] || die "thiếu config.yaml"
+[ -f "$LABELS" ] || die "thiếu $LABELS (cần cho measure_quality.py)"
+if [ -e "$OUT/latency.csv" ] && [ "${FORCE:-0}" != "1" ]; then
+  die "run_id $RUN_ID đã có kết quả trong $OUT (README 10.4: không ghi đè).
+     Dùng số lần r mới, hoặc FORCE=1 nếu thật sự muốn chạy lại."
+fi
 mkdir -p "$OUT"
-log "RUN_ID=$RUN_ID CONFIG=$CONFIG ENGINE=$ENGINE -> $OUT"
 
-# ---------------------------------------------------------------- (1) engine còn lại
-log "[1/6] Dừng engine còn lại (Flink của A, bỏ qua nếu không chạy)..."
-for ct in $OTHER_ENGINE_CTS; do docker stop "$ct" >/dev/null 2>&1 || true; done
-# đảm bảo Kafka thấy được trên mạng p3-net (idempotent)
-docker network connect p3-net "$KAFKA_CT" >/dev/null 2>&1 || true
+if [ -z "${MAX_SECONDS:-}" ]; then
+  case "$RQ" in
+    rq1|rq3) MAX_SECONDS=$((DURATION_S + DRAIN_S + 120)) ;;
+    *)       MAX_SECONDS=1200 ;;   # replay: chạy tới hết file
+  esac
+fi
 
-# ------------------------------------------------- (2) reset topic + checkpoint
-log "[2/6] Xóa & tạo lại topic sensor/alerts; xóa checkpoint..."
-for topic in sensor alerts; do
-  docker exec "$KAFKA_CT" "$KAFKA_TOPICS_BIN" --bootstrap-server "$BROKERS" \
-      --delete --topic "$topic" >/dev/null 2>&1 || true
-  for _ in $(seq 1 30); do
-    if ! docker exec "$KAFKA_CT" "$KAFKA_TOPICS_BIN" --bootstrap-server "$BROKERS" \
-         --list 2>/dev/null | grep -qx "$topic"; then break; fi
-    sleep 1
-  done
-  docker exec "$KAFKA_CT" "$KAFKA_TOPICS_BIN" --bootstrap-server "$BROKERS" \
-      --create --topic "$topic" --partitions 6 --replication-factor 1
-done
-rm -rf "$REPO_ROOT/checkpoints/spark/$RUN_ID"
-docker exec spark-master rm -rf "/checkpoints/spark/$RUN_ID" >/dev/null 2>&1 || true
+log "RUN_ID=$RUN_ID  rq=$RQ engine=$ENGINE config=$CONFIG rate=$RATE dur=${DURATION_S}s -> $OUT"
 
-# --------------------------------- (3) job + measure + docker stats
-log "[3/6] Khởi động job Spark + measure + docker stats..."
-docker exec -d spark-master sh -c \
-  "python3 /opt/p3/spark_job/job.py --run-id '$RUN_ID' --master '$MASTER_URL' \
-   --bootstrap-servers '$BROKERS' > /tmp/p3_engine.log 2>&1"
+# ---------------------------------------------------------------- (1) đồng hồ
+log "[1/7] Kiểm tra đồng hồ trước khi đo (bắt buộc, lệch > 50 ms là dừng)"
+if ! bash scripts/check_clock.sh; then
+  die "đồng hồ lệch quá ngưỡng -> KHÔNG đo.
+     Sửa: trong PowerShell chạy 'wsl --shutdown', mở lại Ubuntu + Docker Desktop, rồi chạy lại."
+fi
 
-"$PY" measure/measure_latency.py \
-    --bootstrap-servers "$HOST_BROKERS" \
-    --group "measure_$RUN_ID" \
-    --output-dir "$OUT/measure" \
-    --warmup-s "$WARMUP_S" --measure-s "$MEASURE_S" \
-    --stop-after-idle-s "$STOP_AFTER_IDLE_S" \
-    ${RQ3_KILL_WORKER_S:+--kill-offset-s "$RQ3_KILL_WORKER_S"} \
-    > "$OUT/measure.log" 2>&1 &
-MEASURE_PID=$!
+# ------------------------------------------- (2) dừng engine kia, reset topic
+log "[2/7] Dừng engine còn lại (${OTHER_SVCS[*]}), tạo lại topic, xóa checkpoint $RUN_ID"
+DC stop "${OTHER_SVCS[@]}" >/dev/null 2>&1 || true
+DC up -d "${MY_SVCS[@]}" >&2
+bash scripts/create_topics.sh
 
-docker stats --format "{{.Name}},{{.CPUPerc}},{{.MemUsage}},{{.NetIO}}" \
-    spark-master spark-worker-1 spark-worker-2 > "$OUT/docker_stats.csv" 2>&1 &
-STATS_PID=$!
+# Checkpoint: Flink ghi /checkpoints/flink/<run_id>, Spark ghi /checkpoints/spark/<run_id>.
+# Volume là named volume dùng chung cho master + các worker -> xóa 1 lần là đủ.
+if [ "$ENGINE" = flink ]; then
+  DC exec -T flink-jobmanager rm -rf "/checkpoints/flink/$RUN_ID" >/dev/null 2>&1 || true
+else
+  DC exec -T spark-master rm -rf "/checkpoints/spark/$RUN_ID" >/dev/null 2>&1 || true
+fi
 
-cleanup() {
-  log "dọn dẹp tiến trình nền..."
-  [ -n "${MEASURE_PID:-}" ] && kill "$MEASURE_PID" 2>/dev/null || true
-  [ -n "${STATS_PID:-}" ] && kill "$STATS_PID" 2>/dev/null || true
-  wait 2>/dev/null || true
+# ------------------------------------------------------------- (3) submit job
+log "[3/7] Submit job $ENGINE ($RUN_ID)"
+if [ "$ENGINE" = flink ]; then
+  FLINK_ARGS=(run -d -py /opt/p3/flink_job/job.py --run-id "$RUN_ID")
+  if [ "$DELIVERY" = "EXACTLY_ONCE" ]; then FLINK_ARGS+=(--delivery EXACTLY_ONCE); fi
+  DC exec -T flink-jobmanager flink "${FLINK_ARGS[@]}" 2>&1 | tee "$OUT/submit.log"
+else
+  SPARK_SUBMIT=(/opt/spark/bin/spark-submit
+    --master "$MASTER_URL"
+    --deploy-mode client
+    --packages "$SPARK_PACKAGES"
+    --driver-memory 600m
+    --conf spark.executor.memory=2400m
+    --conf spark.executor.cores=2
+    --conf spark.cores.max=4
+    --conf spark.sql.shuffle.partitions=4
+    /opt/p3/spark_job/job.py
+    --run-id "$RUN_ID"
+    --bootstrap-servers "$IN_BROKERS"
+    --checkpoint "/checkpoints/spark/$RUN_ID")
+  # -d: trả về ngay; log driver nằm trong container (/opt/p3 là read-only nên ghi /tmp)
+  DC exec -d spark-master sh -c "$(printf '%q ' "${SPARK_SUBMIT[@]}")> /tmp/p3_driver_$RUN_ID.log 2>&1"
+fi
+
+job_running() {
+  # Không dùng `... | grep -q` vì `pipefail` + SIGPIPE (141) có thể làm hàm trả sai.
+  if [ "$ENGINE" = flink ]; then
+    local out
+    out=$(DC exec -T flink-jobmanager flink list -r 2>/dev/null || true)
+    [[ "$out" =~ [0-9a-f]{32} ]]
+  else
+    DC exec -T spark-master grep -q 'checkpoint=' "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null
+  fi
 }
-trap cleanup EXIT
 
-# ----------------------------------------------------- (4) chờ job RUNNING
-log "[4/6] Chờ job RUNNING (tối đa ${WAIT_RUNNING_S}s)..."
-state=""
-for _ in $(seq 1 $((WAIT_RUNNING_S / 5))); do
-  state="$(curl -s "${SPARK_MASTER_UI}/api/v1/applications" | "$PY" -c "
-import json, sys
-try:
-    apps = json.load(sys.stdin)
-except Exception:
-    print('ERR'); raise SystemExit
-apps = sorted(apps, key=lambda a: a.get('startTime', 0), reverse=True)
-print(apps[0]['state'] if apps else 'NONE')" 2>/dev/null || echo ERR)"
-  [ "$state" = "RUNNING" ] && break
-  sleep 5
+log "      chờ job nhận việc (tối đa ${WAIT_RUNNING_S}s)..."
+ready=0
+for ((i = 0; i < WAIT_RUNNING_S; i += 3)); do
+  if job_running; then ready=1; break; fi
+  sleep 3
 done
-if [ "$state" != "RUNNING" ]; then
-  log "LỖI: job không RUNNING (state=$state). Xem engine log:"
-  docker exec spark-master sh -c 'tail -n 50 /tmp/p3_engine.log' 2>/dev/null || true
-  exit 1
+if [ "$ready" != "1" ]; then
+  if [ "$ENGINE" = spark ]; then
+    DC exec -T spark-master tail -n 40 "/tmp/p3_driver_$RUN_ID.log" 2>/dev/null || true
+  fi
+  die "job $ENGINE không chạy sau ${WAIT_RUNNING_S}s (xem $OUT/submit.log)"
 fi
-log "job RUNNING."
+log "      job đã chạy"
 
-# -------------------------------------------------- (5) producer warm-up + đo
-log "[5/6] Chờ bản ghi đầu tiên (T0)..."
-T0_MS=""
-for _ in $(seq 1 120); do
-  if [ -f "$OUT/measure/t0.txt" ]; then T0_MS="$(cat "$OUT/measure/t0.txt")"; break; fi
-  sleep 1
-done
-if [ -z "$T0_MS" ]; then
-  log "LỖI: không có bản ghi nào sau 120s chờ (job đã RUNNING?)."
-  exit 1
-fi
-log "T0=$T0_MS"
+# ------------------------------------------------------- (4) measure (nền)
+log "[4/7] measure_perf.py collect --docker-stats (nền, tối đa ${MAX_SECONDS}s)"
+MEASURE_FORCE=()
+if [ "${FORCE:-0}" = "1" ]; then MEASURE_FORCE=(--force); fi
+"$PY" measure/measure_perf.py collect --run-id "$RUN_ID" --docker-stats \
+  --bootstrap "$HOST_BROKERS" --max-seconds "$MAX_SECONDS" \
+  ${MEASURE_FORCE[@]+"${MEASURE_FORCE[@]}"} > "$OUT/measure.log" 2>&1 &
+MEASURE_PID=$!
+sleep 2
 
-# RQ3: lên lịch kill worker ở đúng T0 + warmup + offset
-if [ -n "$RQ3_KILL_WORKER_S" ]; then
-  KILL_MS=$((T0_MS + (WARMUP_S + RQ3_KILL_WORKER_S) * 1000))
-  log "RQ3: sẽ kill $RQ3_KILL_WORKER_CT ở T0+$((WARMUP_S + RQ3_KILL_WORKER_S))s, restart sau ${RQ3_RESTART_AFTER_S}s"
+# ------------------------------------------------------------- (5) producer
+log "[5/7] producer: $PRODUCERS tiến trình (tổng $RATE sự kiện/giây, ${DURATION_S}s)"
+PER_RATE=$("$PY" -c "print($RATE / $PRODUCERS)")
+
+prod_args_for() {
+  local k=$1
+  PROD_ARGS=(--bootstrap-servers "$HOST_BROKERS" --producer-id "$k" --n-producers "$PRODUCERS")
+  case "$RQ" in
+    rq0)
+      PROD_ARGS+=(--mode replay --file data/processed/equiv_10k.parquet --speed "$EQUIV_SPEED")
+      ;;
+    rq2)
+      PROD_ARGS+=(--mode replay --file "$REPLAY_FILE" --late-fraction 0.05 --late-shift 1 4)
+      if [ -n "$REPLAY_SPEED" ]; then PROD_ARGS+=(--speed "$REPLAY_SPEED"); fi
+      ;;
+    *)
+      PROD_ARGS+=(--mode rate --rate "$PER_RATE" --duration "$DURATION_S")
+      ;;
+  esac
+  PROD_ARGS+=(--out-dir "$OUT")
+}
+
+# ------------------------------------ (6) rq3: lên lịch giết 1 worker ở giây KILL_AT_S
+KILLER_PID=""
+if [ "$RQ" = "rq3" ]; then
+  log "[6/7] rq3: sẽ giết container '$KILL_CT' ở giây $KILL_AT_S, start lại sau ${RESTART_AFTER_S}s"
   (
-    NOW="$(now_ms)"
-    sleep_ms $((KILL_MS - NOW))
-    log "RQ3: kill worker!"
-    "${COMPOSE[@]}" stop "$RQ3_KILL_WORKER_CT"
-    sleep "$RQ3_RESTART_AFTER_S"
-    log "RQ3: restart worker!"
-    "${COMPOSE[@]}" start "$RQ3_KILL_WORKER_CT"
+    sleep "$KILL_AT_S"
+    KILL_MS=$("$PY" -c 'import time; print(time.time_ns() // 1_000_000)')
+    docker kill "$KILL_CT" >/dev/null 2>&1 || true
+    KILL_MS="$KILL_MS" KILL_CT="$KILL_CT" RESTART_AFTER_S="$RESTART_AFTER_S" \
+      "$PY" - "$OUT" <<'PY'
+import json, os, sys
+from pathlib import Path
+p = Path(sys.argv[1]) / "meta.json"
+meta = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+meta.update({"kill_ts_ms": int(os.environ["KILL_MS"]),
+             "killed_container": os.environ["KILL_CT"],
+             "restart_after_s": float(os.environ["RESTART_AFTER_S"])})
+p.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+PY
+    echo "[run] rq3: đã kill $KILL_CT ở $KILL_MS ms (ghi vào meta.json)"
+    sleep "$RESTART_AFTER_S"
+    docker start "$KILL_CT" >/dev/null 2>&1 || true
+    echo "[run] rq3: đã start lại $KILL_CT"
   ) &
   KILLER_PID=$!
+else
+  log "[6/7] $RQ: không kill worker (chỉ rq3)"
 fi
 
-if [ "$CONFIG" = "rate" ]; then
-  # --mode rate: phần của A (chưa có trong repo khi B viết script này).
-  # PRODUCER_CMD hoặc image của A phải tự chạy đúng WARMUP_S + MEASURE_S giây.
-  if [ -n "$PRODUCER_CMD" ]; then
-    docker run --rm --network p3-net $PRODUCER_CMD > "$OUT/producer.log" 2>&1
-  else
-    docker run --rm --network p3-net \
-      -e P3_BROKERS="$BROKERS" \
-      -e P3_DURATION=$((WARMUP_S + MEASURE_S)) \
-      "$PRODUCER_IMAGE" > "$OUT/producer.log" 2>&1
-  fi
-else
-  # replay: bắn hết dữ liệu rồi thoát (tốc độ do PRODUCER_ARGS_REPLAY quyết định)
-  if [ "$PRODUCER_MODE" = "host" ]; then
-    "$PY" producer/producer.py --mode replay --file "$PRODUCER_FILE_HOST" \
-        --bootstrap-servers "$HOST_BROKERS" $PRODUCER_ARGS_REPLAY \
-        > "$OUT/producer.log" 2>&1
-  elif [ -n "$PRODUCER_CMD" ]; then
-    docker run --rm --network p3-net $PRODUCER_CMD > "$OUT/producer.log" 2>&1
-  else
-    docker run --rm --network p3-net \
-      -e P3_BROKERS="$BROKERS" \
-      -e P3_ARGS="$PRODUCER_ARGS_REPLAY" \
-      "$PRODUCER_IMAGE" > "$OUT/producer.log" 2>&1
-  fi
-fi
-if [ -n "${KILLER_PID:-}" ]; then wait "$KILLER_PID" 2>/dev/null || true; fi
-log "producer xong; chờ drain ${DRAIN_S}s..."
+PROD_PIDS=()
+for ((k = 0; k < PRODUCERS; k++)); do
+  prod_args_for "$k"
+  "$PY" producer/producer.py "${PROD_ARGS[@]}" > "$OUT/producer_$k.log" 2>&1 &
+  PROD_PIDS+=($!)
+done
+
+prod_fail=0
+for pid in "${PROD_PIDS[@]}"; do wait "$pid" || prod_fail=1; done
+[ "$prod_fail" = "0" ] || log "CẢNH BÁO: có producer lỗi (xem $OUT/producer_*.log)"
+if [ -n "$KILLER_PID" ]; then wait "$KILLER_PID" 2>/dev/null || true; fi
+log "producer xong; chờ drain ${DRAIN_S}s"
 sleep "$DRAIN_S"
 
-# ---------------------------------------------------------- (6) thu thập kết quả
-log "[6/6] Dừng job, thu log, ghi CSV tổng hợp..."
-docker exec spark-master sh -c 'pkill -f "spark_job/job.py"' >/dev/null 2>&1 || true
-docker cp spark-master:/tmp/p3_engine.log "$OUT/engine.log" >/dev/null 2>&1 || true
-kill "$MEASURE_PID" 2>/dev/null || true
+# ------------------------------------------- (7) hủy job + tổng hợp kết quả
+log "[7/7] Hủy job, tổng hợp kết quả"
+if [ "$ENGINE" = flink ]; then
+  for jid in $(DC exec -T flink-jobmanager flink list -r 2>/dev/null \
+               | grep -oE '[0-9a-f]{32}' | sort -u); do
+    DC exec -T flink-jobmanager flink cancel "$jid" >/dev/null 2>&1 || true
+  done
+  DC logs --no-color --tail 3000 flink-jobmanager flink-taskmanager-1 flink-taskmanager-2 \
+    > "$OUT/engine.log" 2>&1 || true
+else
+  DC exec -T spark-master sh -c "pkill -f 'spark_job/job.py'" >/dev/null 2>&1 || true
+  docker cp "spark-master:/tmp/p3_driver_$RUN_ID.log" "$OUT/engine.log" >/dev/null 2>&1 || true
+fi
+
+# collect đã tự summarize trong finally; gọi lại cho chắc (idempotent, đọc file đã lưu)
+kill -TERM "$MEASURE_PID" 2>/dev/null || true
 wait "$MEASURE_PID" 2>/dev/null || true
-kill "$STATS_PID" 2>/dev/null || true
+"$PY" measure/measure_perf.py summarize --run-id "$RUN_ID" \
+  || log "CẢNH BÁO: summarize lỗi (xem $OUT/measure.log)"
 
-RQC="${RUN_ID%%_*}"
-SUMMARY_CSV="$REPO_ROOT/results/summary/$RQC.csv"
-"$PY" - "$OUT" "$RUN_ID" "$ENGINE" "$CONFIG" "$SUMMARY_CSV" "$WARMUP_S" "$MEASURE_S" <<'PY'
-import csv, json, os, re, sys
-out, run_id, engine, config, csv_path, warmup_s, measure_s = sys.argv[1:8]
+if [ "$RQ" = "rq2" ]; then
+  log "      measure_quality.py: chấm $OUT/alerts.jsonl bằng $LABELS"
+  "$PY" measure/measure_quality.py --labels "$LABELS" --alerts "$OUT/alerts.jsonl" \
+    --out "$REPO_ROOT/results/summary/${RUN_ID}_quality.csv" \
+    || log "CẢNH BÁO: measure_quality.py lỗi"
+fi
 
-def load_json(p, default=None):
-    try:
-        with open(p, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
+log "      kiểm tra lại đồng hồ sau khi đo"
+clock_ok=0
+if bash scripts/check_clock.sh; then clock_ok=1; fi
 
-s = load_json(os.path.join(out, "measure", "summary.json"), {}) or {}
-kinds = s.get("kinds", {})
-alert = kinds.get("alert", {})
-probe = kinds.get("probe", {})
-rq3 = s.get("rq3") or {}
-
-def tail(p):
-    try:
-        with open(p, encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except Exception:
-        return ""
-
-eng_log = tail(os.path.join(out, "engine.log"))
-m = re.findall(r"late_dropped tổng cộng: (\d+)", eng_log)
-late_dropped = int(m[-1]) if m else None
-
-prod_log = tail(os.path.join(out, "producer.log"))
-m = re.findall(r"đã gửi xong (\d+) sự kiện trong ([\d.]+)s", prod_log)
-n_input, prod_dur = (int(m[-1][0]), float(m[-1][1])) if m else (None, None)
-throughput = round(n_input / prod_dur, 2) if n_input and prod_dur else None
-
-row = {
-    "run_id": run_id, "engine": engine, "config": config,
-    "warmup_s": warmup_s, "measure_s": measure_s,
-    "n_input_events": n_input, "producer_duration_s": prod_dur,
-    "throughput_eps": throughput, "late_dropped": late_dropped,
-    "alert_n": alert.get("count"), "alert_p50_ms": alert.get("p50_ms"),
-    "alert_p90_ms": alert.get("p90_ms"), "alert_p99_ms": alert.get("p99_ms"),
-    "alert_max_ms": alert.get("max_ms"),
-    "probe_n": probe.get("count"), "probe_p50_ms": probe.get("p50_ms"),
-    "probe_p90_ms": probe.get("p90_ms"), "probe_p99_ms": probe.get("p99_ms"),
-    "probe_max_ms": probe.get("max_ms"),
-    "rq3_pre_kill_p99_ms": rq3.get("pre_kill_p99_ms"),
-    "rq3_recovery_s": rq3.get("recovery_s"),
-}
-fields = list(row)
-os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-exists = os.path.exists(csv_path)
-with open(csv_path, "a", newline="", encoding="utf-8") as f:
-    w = csv.DictWriter(f, fieldnames=fields)
-    if not exists:
-        w.writeheader()
-    w.writerow(row)
-print("CSV dòng:", json.dumps(row, ensure_ascii=False, default=str))
-PY
-
-log "XONG. Kết quả trong: $OUT"
-log "  engine.log, producer.log, measure.log, docker_stats.csv"
-log "  measure/latency_windows.csv, measure/summary.json"
-log "  +1 dòng -> $SUMMARY_CSV"
+log "XONG $RUN_ID -> $OUT"
+log "  engine.log, producer_*.log, measure.log, latency.csv, alerts.jsonl, summary.json"
+if [ "$clock_ok" != "1" ]; then
+  log "CẢNH BÁO: đồng hồ lệch ở CUỐI run -> KHÔNG dùng số liệu độ trễ của run này, chạy lại với số r mới"
+  exit 1
+fi

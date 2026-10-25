@@ -35,18 +35,18 @@ def _load_params_from_config():
     """Đọc lại tham số từ config.yaml (nếu tồn tại). Lỗi thì giữ nguyên mặc định."""
     global WINDOW, Z_THRESHOLD, EWMA_LAMBDA, EWMA_L, WARMUP, TOLERANCE_MS, PROBE_EVERY
     try:
-        from pathlib import Path
-        import yaml
-        p = Path(__file__).resolve().parent.parent / "config.yaml"
-        if p.exists():
-            cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-            WINDOW = int(cfg.get("window", WINDOW))
-            Z_THRESHOLD = float(cfg.get("z_threshold", Z_THRESHOLD))
-            EWMA_LAMBDA = float(cfg.get("ewma_lambda", EWMA_LAMBDA))
-            EWMA_L = float(cfg.get("ewma_L", EWMA_L))
-            WARMUP = int(cfg.get("warmup", WARMUP))
-            TOLERANCE_MS = int(cfg.get("tolerance_ms", TOLERANCE_MS))
-            PROBE_EVERY = int(cfg.get("probe_mod", PROBE_EVERY))
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+        from common import config as _config
+        cfg = _config.load()      # config.yaml là nguồn duy nhất của tham số (README 4)
+        WINDOW = int(_config.get("detector.zscore.window", cfg=cfg))
+        Z_THRESHOLD = float(_config.get("detector.zscore.threshold", cfg=cfg))
+        EWMA_LAMBDA = float(_config.get("detector.ewma.lambda", cfg=cfg))
+        EWMA_L = float(_config.get("detector.ewma.L", cfg=cfg))
+        WARMUP = int(_config.get("detector.warmup", cfg=cfg))
+        TOLERANCE_MS = int(_config.get("late.tolerance_ms", cfg=cfg))
+        PROBE_EVERY = int(_config.get("probe.every", cfg=cfg))
     except Exception:
         pass  # giữ mặc định
 

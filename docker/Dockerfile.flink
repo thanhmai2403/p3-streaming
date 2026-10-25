@@ -1,0 +1,36 @@
+# flink:2.2.1 (Java 17) không có Python -> tự build Python 3.11 (theo cách trong tài liệu PyFlink + Docker).
+# --enable-shared là bắt buộc: PyFlink (pemja) cần libpython dạng thư viện chia sẻ.
+FROM flink:2.2.1
+
+ARG PYTHON_VERSION=3.11.13
+
+# Image flink:2.2.1 mặc định chạy bằng user `flink` (không phải root) -> cần root để apt/pip,
+# cuối file trả lại USER flink như image gốc.
+USER root
+
+RUN set -eux; \
+    apt-get update -y; \
+    apt-get install -y --no-install-recommends build-essential libssl-dev zlib1g-dev libbz2-dev \
+        libffi-dev liblzma-dev libsqlite3-dev wget ca-certificates; \
+    wget -q https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz; \
+    tar -xzf Python-${PYTHON_VERSION}.tgz; \
+    cd Python-${PYTHON_VERSION}; \
+    ./configure --without-tests --enable-shared; \
+    make -j"$(nproc)"; \
+    make install; \
+    ldconfig /usr/local/lib; \
+    cd ..; rm -rf Python-${PYTHON_VERSION} Python-${PYTHON_VERSION}.tgz; \
+    ln -sf /usr/local/bin/python3 /usr/local/bin/python; \
+    apt-get purge -y build-essential; apt-get autoremove -y; \
+    apt-get clean; rm -rf /var/lib/apt/lists/*
+
+# PyFlink 2.2.1 tự kéo pandas<2.3, pyarrow<21, numpy: KHÔNG ghim khác đi trong container này.
+RUN pip3 install --no-cache-dir apache-flink==2.2.1 pyyaml==6.0.2
+
+# Kafka connector cho Flink 2.2 (Maven: org.apache.flink:flink-sql-connector-kafka:5.0.0-2.2)
+COPY docker/jars/flink-sql-connector-kafka-5.0.0-2.2.jar /opt/flink/lib/
+
+# Thư mục checkpoint thuộc user flink. Named volume sẽ kế thừa quyền này ở lần mount đầu.
+RUN mkdir -p /checkpoints/flink && chown -R flink:flink /checkpoints
+
+USER flink

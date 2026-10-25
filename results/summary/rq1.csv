@@ -1,0 +1,5 @@
+run_id,rq,engine,cfg,rep,n_probe_window,lat_p50_ms,lat_p95_ms,lat_p99_ms,lat_max_ms,throughput_mean_ev_s,throughput_median_ev_s,sent_rate_ev_s,median_first30_ms,median_last30_ms,sustainable,dup_seq,dup_extra,expected_probes,missing_seq,missing_basis,clock_ok,clock_problems,sink_p50_ms
+rq1_flink_try5000_r1,rq1,flink,try5000,1,2751,20773.0,92011.0,94864.5,97567.0,1528.3333333333333,0.0,4639.208333333333,,,False,0,0,3000,0,sent.csv,,,
+rq1_flink_try5000_r2,rq1,flink,try5000,2,3000,9170.5,42290.2,75113.4,114000.0,1666.6666666666667,1150.0,4585.661538461539,461.0,,False,0,0,3000,0,sent.csv,,,
+rq1_flink_try5000_r3,rq1,flink,try5000,3,2976,5129.0,22655.0,70811.75,86505.0,1653.3333333333335,0.0,4587.969230769231,-65105.0,,False,0,0,3000,0,sent.csv,,,
+rq1_flink_try5000_r4,rq1,flink,try5000,4,2992,6108.5,29505.799999999996,73462.6,102149.0,1662.2222222222224,0.0,4664.46875,944.0,,False,0,0,3000,0,sent.csv,False,19 probe có emit < ingest; 5 probe có recv < emit; sent.csv nhảy 31 s,261.0

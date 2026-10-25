@@ -1,53 +1,80 @@
-# P3 – config.yaml: nguồn duy nhất của mọi tham số (README mục 4).
-# Muốn đổi: sửa file này trong một commit riêng, nhắn người kia TRƯỚC khi đổi code.
-# Code không được hard-code các giá trị ở đây; đọc qua common/config.py.
+# Nguồn DUY NHẤT của mọi tham số (README mục 4). Code không được hard-code các giá trị này.
+# Muốn đổi: commit riêng + báo người kia TRƯỚC khi đổi code.
+version: 1
 
-# === Thuật toán phát hiện (README mục 4 & 6) ===
-window: 24                 # cửa sổ rolling z-score (số mẫu)
-z_threshold: 3.0            # ngưỡng |z| cho z-score
-ewma_lambda: 0.3            # lambda EWMA
-ewma_L: 3.0                 # ngưỡng EWMA: |x - m| > L * sqrt(v)
-warmup: 24                  # warm-up mỗi key: chỉ cập nhật state, không phát alert
-eps: 1.0e-9                 # ngưỡng std/phương sai để tránh chia 0
-tolerance_ms: 7200000       # ngưỡng trễ 2 giờ event-time (mục 6.3)
-probe_mod: 100              # phát probe khi seq % 100 == 0
-
-# === Engine (README mục 4) ===
-parallelism: 4              # Flink: 2 TM x 2 slot ; Spark: shuffle.partitions = 4
-checkpoint_interval_s: 10   # chu kỳ checkpoint (Flink; Spark dùng trigger mặc định)
-state_backend: rocksdb      # cả hai engine
-
-# === Kafka (README mục 3) ===
 kafka:
-  docker_brokers: "kafka:9092"      # trong mạng docker
-  host_brokers: "localhost:29092"   # từ máy host
-  topic_in: "sensor"                # 6 partition, RF = 1
-  topic_out: "alerts"               # 6 partition, RF = 1
+  bootstrap_internal: "kafka:9092"     # dùng trong mạng docker (Flink/Spark)
+  bootstrap_host: "localhost:29092"    # dùng từ máy host (producer, measure)
+  topic_in: sensor
+  topic_out: alerts
   partitions: 6
   replication_factor: 1
-  consumer_group: "flink-job"       # Flink; Spark KHÔNG commit offset (lưu trong checkpoint)
-  # Cấu hình producer dùng chung (README mục 8)
-  producer:
-    linger_ms: 5
-    batch_size: 65536
-    acks: 1
-    compression_type: none
+  starting_offsets: earliest
+  producer:                            # cấu hình confluent-kafka dùng chung (README mục 8)
+    linger.ms: 5
+    batch.size: 65536
+    acks: "1"
+    compression.type: none
 
-# === Tài nguyên mỗi engine (README mục 4): tổng 4 core + 8 GB, mỗi lần chỉ bật một engine ===
-resources:
-  spark:
-    workers: 2
-    worker_cores: 2
-    worker_memory_gb: 4
+detector:
+  key: [station_id, param]
+  warmup: 24                           # 24 mẫu đầu mỗi key: chỉ cập nhật state
+  zscore:
+    window: 24
+    threshold: 3.0
+    min_std: 1.0e-9                    # std quần thể (ddof = 0)
+  ewma:
+    lambda: 0.3
+    L: 3.0
+    min_var: 1.0e-9
 
-# === Đường dẫn ===
-checkpoint_root: "/checkpoints"     # /checkpoints/spark/<run_id> và /checkpoints/flink/<run_id>
-results_raw: "results/raw"          # results/raw/<run_id>/
-results_summary: "results/summary"  # rq1.csv, rq2.csv, rq3.csv
+late:
+  tolerance_ms: 7200000                # 2 giờ event-time (README 6.3)
 
-# === Thí nghiệm (README mục 10.1) ===
-experiment:
-  warmup_s: 30             # bỏ 30 giây đầu
-  measure_s: 180           # đo 180 giây
-  producer_duration_s: 210 # warm-up + đo (rate mode)
-  wait_job_running_s: 180  # thời gian chờ tối đa job RUNNING
+probe:
+  every: 100                           # seq % 100 == 0 -> phát thêm 1 bản ghi probe
+
+engine:
+  parallelism: 4
+  checkpoint_interval_ms: 10000
+  state_backend: rocksdb
+
+flink:
+  consumer_group: flink-job
+  python_execution_mode: thread        # thread (pemja, chạy Python trong JVM) nhanh ~2x so với process
+  assign_timestamps: false             # job không dùng timer event-time -> bỏ bước gán timestamp (Python) cho nhanh
+  watermark_ms: 10000                  # chỉ dùng khi assign_timestamps: true
+  delivery_guarantee: AT_LEAST_ONCE    # RQ3 chạy thêm EXACTLY_ONCE
+  transactional_id_prefix: p3-flink
+  transaction_timeout_ms: 600000       # phải <= transaction.max.timeout.ms của broker (mặc định 15 phút)
+  checkpoint_dir: "file:///checkpoints/flink"
+
+spark:
+  shuffle_partitions: 4
+  checkpoint_dir: "/checkpoints/spark"
+
+producer:
+  seed: 42
+  synthetic:                           # dữ liệu tổng hợp cho RQ1/RQ3 (README 7.3)
+    n_stations: 1000
+    prefix: "syn_"
+    param: pm25
+    start_value: 50.0
+
+measure:
+  warmup_s: 30
+  duration_s: 180
+  sustain_p99_ms: 1000                 # thông lượng bền vững: p99 < 1000 ms
+  sustain_drift_ratio: 1.5             # và trung vị 30 s cuối <= 1.5 x trung vị 30 s đầu
+  drift_window_s: 30
+  recovery_window_s: 5                 # RQ3: cửa sổ 5 s
+  recovery_factor: 2.0                 # RQ3: p99 về dưới 2 x p99 trước khi kill
+  recovery_baseline_s: 30              # p99 "trước khi kill" tính trên 30 s ngay trước kill
+
+sota:
+  calib_fraction: 0.2                  # ngưỡng = phân vị 99% điểm số trên 20% dữ liệu đầu (không dùng nhãn)
+  threshold_quantile: 0.99
+  mp:
+    m: 24
+    normalize: true                    # z-normalized (chuẩn của Yeh et al. 2016); chạy thêm --no-normalize làm ablation
+    refractory: 24                     # sau 1 alert bỏ qua m mẫu: 1 discord làm m đoạn con liên tiếp có điểm cao

@@ -1,106 +1,190 @@
-# Docker Compose cho Spark (Thành viên B).
-# - spark-master  : điều phối + chạy DRIVER (job.py được docker exec vào master)
-# - spark-worker-1: 2 core, 4 GB
-# - spark-worker-2: 2 core, 4 GB
-#   => tổng tài nguyên đúng 4 core + 8 GB (README mục 4).
-#
-# Kafka/ZooKeeper thuộc phần của Thành viên A (README mục 9): chạy compose của A
-# TRƯỚC rồi `docker network connect p3-net kafka` (hoặc để A dùng chung network
-# p3-net) để job trong mạng này thấy broker `kafka:9092`.
-#
-# Ghi chú vận hành:
-# - ./checkpoints bind-mount trên CẢ 3 container để driver + executor dùng chung
-#   thư mục checkpoint (file:///checkpoints/spark/<run_id>).
-# - Nạp job: docker exec spark-master python /opt/p3/spark_job/job.py \
-#     --run-id <id> --master spark://spark-master:7077 --bootstrap-servers kafka:9092
-# - Kết nối Kafka connector lúc submit qua --packages (P3_SPARK_PACKAGES có sẵn
-#   trong image); driver tải từ Maven Central một lần rồi phân phối cho executors.
-# - RQ3: docker compose stop spark-worker-1 (giây 60) rồi start lại (giây 70);
-#   driver tự replay từ checkpoint.
+# P3: Kafka (KRaft, 1 broker) + Flink (1 JobManager, 2 TaskManager x 2 slot).
+# Phần Spark (spark-master, spark-worker x2) do B thêm vào cuối file.
+# Tài nguyên engine (README mục 4): TaskManager 2 x (2 core, 3.5 GB) = 4 core cho xử lý.
+# JobManager (điều phối) để riêng 0.5 core / 1 GB -> Spark master phải để y hệt cho công bằng.
+# MỖI LẦN CHỈ BẬT MỘT ENGINE.
+
+name: p3
+
+x-flink: &flink
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.flink
+  image: p3-flink:2.2.1
+  volumes:
+    - ./:/opt/p3:ro
+    - flink-checkpoints:/checkpoints
+  depends_on:
+    kafka:
+      condition: service_healthy
+  environment:
+    PYTHONPATH: /opt/p3
+    P3_CONFIG: /opt/p3/config.yaml
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: flink-jobmanager
+      taskmanager.numberOfTaskSlots: 2
+      parallelism.default: 4
+      jobmanager.memory.process.size: 1024m
+      taskmanager.memory.process.size: 3072m
+      state.backend.type: rocksdb
+      execution.checkpointing.dir: file:///checkpoints/flink
+      restart-strategy.type: fixed-delay
+      restart-strategy.fixed-delay.attempts: 1000
+      restart-strategy.fixed-delay.delay: 2 s
+      python.executable: /usr/local/bin/python3
+      python.client.executable: /usr/local/bin/python3
+      python.execution-mode: thread
+
+# Spark dùng chung build + volume cho master và 2 worker (phần của B).
+# Mount ./:/opt/p3:ro để sửa code/config không phải build lại (giống Flink).
+x-spark: &spark
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.spark
+  image: p3-spark:4.1.3
+  volumes:
+    - ./:/opt/p3:ro
+    - spark-checkpoints:/checkpoints
 
 services:
+  kafka:
+    image: apache/kafka:4.2.2
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # 1 broker -> mọi topic nội bộ phải RF = 1 (nếu không, consumer group / transaction sẽ treo)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: "-Xms1g -Xmx1g"
+    cpus: 2
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  flink-jobmanager:
+    <<: *flink
+    container_name: flink-jm
+    hostname: flink-jobmanager
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    cpus: 0.5
+    mem_limit: 1200m
+
+  # Hai TaskManager đặt tên riêng để RQ3 kill đúng 1 container (docker kill flink-tm1).
+  flink-taskmanager-1:
+    <<: *flink
+    container_name: flink-tm1
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    cpus: 2
+    mem_limit: 3500m
+
+  flink-taskmanager-2:
+    <<: *flink
+    container_name: flink-tm2
+    command: taskmanager
+    depends_on: [flink-jobmanager]
+    cpus: 2
+    mem_limit: 3500m
+
+  # ---------------- Spark (Thành viên B) ----------------
+  # Tài nguyên đặt Y HỆT phía Flink để so sánh công bằng (README mục 4):
+  #   spark-master = flink-jobmanager (0,5 core / 1,2 GB) - điều phối + chạy driver
+  #   spark-worker = flink-taskmanager (2 core / 3,5 GB mỗi cái) -> tổng 4 core xử lý
+  # MỖI LẦN CHỈ BẬT MỘT ENGINE (worker-1 dùng cổng UI 8081 trùng flink-jm).
+  # Giới hạn RAM của worker để 3072m cho JVM, phần còn lại cho Python worker (pandas UDF).
   spark-master:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.spark
-    image: p3-spark:4.1.3
+    <<: *spark
     container_name: spark-master
     hostname: spark-master
     environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_MASTER_WEBUI_PORT=8080
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
+      P3_CONFIG: /opt/p3/config.yaml
+      PYTHONPATH: /opt/p3
+      P3_SPARK_PACKAGES: org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      SPARK_MASTER_PORT: "7077"
+      SPARK_MASTER_WEBUI_PORT: "8080"
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      SPARK_USER: spark
     ports:
-      - "7077:7077"   # master RPC (driver kết nối từ... master container, giữ cho debug)
-      - "8080:8080"   # master Web UI (xem application RUNNING)
+      - "7077:7077"   # master RPC (job.py --master spark://spark-master:7077)
+      - "8080:8080"   # master Web UI (kiểm tra application RUNNING)
       - "4040:4040"   # Spark UI của driver
-    volumes:
-      - ./checkpoints:/checkpoints
-      - ./results:/results
-    networks:
-      - p3-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    cpus: 0.5
+    mem_limit: 1200m
 
+  # Đặt tên riêng để RQ3 kill đúng 1 container (docker kill spark-worker-1).
   spark-worker-1:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.spark
-    image: p3-spark:4.1.3
+    <<: *spark
     container_name: spark-worker-1
     hostname: spark-worker-1
-    depends_on:
-      - spark-master
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=4g
-      - SPARK_WORKER_WEBUI_PORT=8081
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
+      P3_CONFIG: /opt/p3/config.yaml
+      PYTHONPATH: /opt/p3
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 3072m
+      SPARK_WORKER_WEBUI_PORT: "8081"
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      SPARK_USER: spark
     ports:
       - "8081:8081"   # worker 1 Web UI
-    volumes:
-      - ./checkpoints:/checkpoints
-    networks:
-      - p3-net
+    depends_on: [spark-master]
+    cpus: 2
+    mem_limit: 3500m
 
   spark-worker-2:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.spark
-    image: p3-spark:4.1.3
+    <<: *spark
     container_name: spark-worker-2
     hostname: spark-worker-2
-    depends_on:
-      - spark-master
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=4g
-      - SPARK_WORKER_WEBUI_PORT=8082
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-      - SPARK_USER=spark
+      P3_CONFIG: /opt/p3/config.yaml
+      PYTHONPATH: /opt/p3
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 3072m
+      SPARK_WORKER_WEBUI_PORT: "8082"
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      SPARK_USER: spark
     ports:
       - "8082:8082"   # worker 2 Web UI
-    volumes:
-      - ./checkpoints:/checkpoints
-    networks:
-      - p3-net
+    depends_on: [spark-master]
+    cpus: 2
+    mem_limit: 3500m
 
-networks:
-  p3-net:
-    name: p3-net
-    driver: bridge
+volumes:
+  flink-checkpoints:
+  spark-checkpoints:

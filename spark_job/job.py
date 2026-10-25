@@ -11,7 +11,7 @@ Cách chạy:
     # 1) Streaming (trong container Spark, hoặc local với Kafka đang chạy):
     python spark_job/job.py --run-id rq2_spark_replay_r1 \
         --master spark://spark-master:7077 --bootstrap-servers kafka:9092
-    # (mặc định bootstrap-servers lấy từ config.yaml kafka.docker_brokers)
+    # (mặc định bootstrap-servers lấy từ config.yaml kafka.bootstrap_internal)
 
     # 2) Kiểm thử offline (không cần Spark/Kafka): chạy ĐÚNG hàm xử lý state
     #    mà applyInPandasWithState dùng, trên parquet, rồi so với bản tham chiếu:
@@ -221,7 +221,8 @@ def build_spark(cfg, run_id, master=None, packages=None, force_no_rocksdb=False)
     builder = SparkSession.builder.appName(f"p3-spark-{run_id}")
     if master:
         builder = builder.master(master)
-    builder = builder.config("spark.sql.shuffle.partitions", int(cfg["parallelism"]))
+    builder = builder.config("spark.sql.shuffle.partitions",
+                             int(cfg["spark"]["shuffle_partitions"]))
     if packages:
         builder = builder.config("spark.jars.packages", packages)
     spark = builder.getOrCreate()
@@ -361,8 +362,8 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
     src = Path(input_path).resolve()
     if not src.is_file():
         raise SystemExit(f"Không tìm thấy parquet đầu vào: {src}")
-    # checkpoint dùng riêng thư mục local (cfg["checkpoint_root"] là đường dẫn
-    # trong container, không dùng được khi chạy ngoài Docker trên Windows).
+    # checkpoint dùng riêng thư mục local (cfg["spark"]["checkpoint_dir"] là đường
+    # dẫn trong container, không dùng được khi chạy ngoài Docker trên Windows).
     work = Path(__file__).resolve().parent.parent / "checkpoints" / "_equiv_check"
     if work.exists():
         shutil.rmtree(work, ignore_errors=True)
@@ -439,14 +440,14 @@ def main():
     ap.add_argument("--run-id", default=None,
                     help="<rq>_<engine>_<config>_r<rep>; dùng cho checkpoint")
     ap.add_argument("--bootstrap-servers", default=None,
-                    help="mặc định: P3_KAFKA_BROKERS hoặc config.yaml kafka.docker_brokers")
+                    help="mặc định: P3_KAFKA_BROKERS hoặc config.yaml kafka.bootstrap_internal")
     ap.add_argument("--master", default=None,
                     help="ví dụ spark://spark-master:7077; mặc định local[*]")
     ap.add_argument("--packages", default=None,
                     help="gói Maven (vd org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3) "
                          "khi chạy local ngoài Docker")
     ap.add_argument("--checkpoint", default=None,
-                    help="mặc định: <checkpoint_root>/spark/<run_id>")
+                    help="mặc định: <spark.checkpoint_dir>/<run_id> = /checkpoints/spark/<run_id>")
     ap.add_argument("--no-rocksdb", action="store_true",
                     help="ép dùng state store provider mặc định")
     ap.add_argument("--config", default=None, help="đường dẫn config.yaml khác")
@@ -487,9 +488,9 @@ def main():
                          "Hoặc dùng --test-parquet để kiểm thử offline.")
     bootstrap = (args.bootstrap_servers
                  or os.environ.get("P3_KAFKA_BROKERS")
-                 or cfg["kafka"]["docker_brokers"])
+                 or cfg["kafka"]["bootstrap_internal"])
     checkpoint_dir = (args.checkpoint
-                      or f"{cfg['checkpoint_root']}/spark/{args.run_id}")
+                      or f"{cfg['spark']['checkpoint_dir']}/{args.run_id}")
     master = args.master or os.environ.get("P3_SPARK_MASTER")
     packages = args.packages or os.environ.get("P3_SPARK_PACKAGES")
 

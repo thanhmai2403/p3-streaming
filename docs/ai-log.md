@@ -68,3 +68,69 @@
   4. Shutdown hook Spark báo lỗi xóa thư mục temp/LOCK trên Windows — vô hại (chỉ là dọn temp).
 - Đã sửa gì so với AI: không đổi detector/ngưỡng; chỉ thêm hạ tầng chạy (chế độ `--test-parquet-spark`, schema tường minh, tổng hợp seq/ingest_ts_ms đúng cách bản tham chiếu đã làm).
 
+
+## 2026-10-25 – [B] – Hợp nhất nhánh A (Flink + hạ tầng) vào `b/data`; sửa 2 file parquet cho pyarrow 19.0.0; thêm Spark vào docker-compose
+- Công cụ: Cline (Claude)
+- Yêu cầu chính (rút gọn): Hợp nhất `origin/main` của A (Flink 2.2.1, Kafka 4.2.2, `--mode rate`, `measure_perf.py`, `matrix_profile.py`, `tests/`, `docs/handover_A.md`) vào nhánh của B mà **không mất** code Spark/`--mode replay`; làm `equiv_10k.parquet` và `openaq_hn_injected.parquet` đọc được bằng pandas 2.2.3 + pyarrow 19.0.0; thêm `spark-master` + 2 worker vào `docker-compose.yml` với tài nguyên y hệt Flink; stage các file Ưu tiên 0 (chưa commit/push).
+- Phát hiện quan trọng khi merge:
+  1. Hai nhánh **không cùng lịch sử** (`fatal: refusing to merge unrelated histories`) — A upload lại repo chứ không fork từ commit của B.
+  2. Commit `b907f6a` của A ("khung thư mục theo README mục 2") đã **ghi đè mọi file thành 0 byte**, sau đó A chỉ điền lại phần của A. Vì vậy fast-forward sẽ **xóa sạch** `spark_job/job.py`, `common/detectors_ref.py`, `measure/*`, `sota/half_space_trees.py`, `docker/Dockerfile.spark`, `docs/ai-log.md`, `PLAN.md`…
+  → Merge bằng `git merge --allow-unrelated-histories --no-ff --no-commit origin/main`, rồi soát từng file: chỉ 7 file xung đột (`.gitignore`, `README.md`, `common/config.py`, `common/schema.py`, `config.yaml`, `docker-compose.yml`, `producer/producer.py`); các file B còn lại giữ nguyên byte-for-byte.
+- Cách hợp nhất file dùng chung:
+  1. `config.yaml` + `README.md`: lấy bản của A (đã có `recv_ts_ms`, `flink.python_execution_mode: thread`, `flink.assign_timestamps: false`, `sota.mp.refractory`, `spark.shuffle_partitions: 4`, `spark.checkpoint_dir: /checkpoints/spark`).
+  2. `docker-compose.yml`: lấy bản của A (Kafka + Flink) rồi thêm `spark-master`/`spark-worker-1`/`spark-worker-2` với giới hạn y hệt phía Flink (0,5 core/1200m và 2 core/3500m → tổng 4 core), volume `spark-checkpoints`.
+  3. `common/schema.py`: giữ API của A (`make_seq`/`split_seq`, `make_event`, `make_alert`/`make_probe`, `validate_output`, `dumps`, `now_ms`) và thêm lại phần của B (`spark_event_struct`, `spark_record_struct`, `make_record`, `serialize_*`, `parse_record`, bí danh `SENSOR_VERSION`).
+  4. `common/config.py`: giữ `load()`/`get()` của A, thêm `load_config()`/`resolve_config_path()` của B, kèm bảng `LEGACY_KEYS` dịch tên khóa phẳng cũ (`window` → `detector.zscore.window`, `kafka.docker_brokers` → `kafka.bootstrap_internal`, …) để code cũ không vỡ.
+  5. `producer/producer.py`: lấy bản của A (`Sender`, `--mode rate`, `Pacer`, `sent.csv`) và đưa lại chuẩn replay của B: chia trạm theo `chỉ_số_trạm % n_producers` (`station_index`/`select_stations`), nhận `--bootstrap-servers` (tên cũ của B), `--dry-run --output` ghi JSON từng sự kiện.
+  6. `spark_job/job.py` + `common/detectors_ref.py`: đổi khóa cấu hình cũ sang cấu trúc mới của A (`spark.shuffle_partitions`, `spark.checkpoint_dir`, `kafka.bootstrap_internal`, `detector.*`, `late.tolerance_ms`, `probe.every`).
+- Sửa parquet: `pd.read_parquet` báo `OSError: Repetition level histogram size mismatch` với **cả 2** file (pyarrow 19.0.0). Cách sửa: đọc bằng JVM (Spark `local[2]` + `coalesce(1)` để giữ nguyên thứ tự dòng vật lý) rồi **ghi lại bằng chính pyarrow 19.0.0** (`to_parquet(engine="pyarrow", index=False)`), `assert_frame_equal` khớp 100% rồi mới `os.replace` file gốc.
+- Đã kiểm tra bằng:
+  - `common/detectors_ref.py` trên `equiv_10k.parquet` (đã sửa) → **759 alert, 0 bỏ vì trễ**; `measure/compare_outputs.py` → `n=759/759, score_mismatch=0, max_diff=0.00e+00` → **TƯƠNG ĐƯƠNG** (exit 0).
+  - `spark_job/job.py --test-parquet-spark` (applyInPandasWithState THẬT, RocksDB) → `spark_alerts.jsonl`; `compare_outputs.py` ref vs spark → **759/759, max_diff=0.00e+00**.
+  - `docker-compose.yml` parse YAML OK: spark-master 0.5 CPU/1200m, mỗi worker 2 CPU/3500m (tổng 4 core) — y hệt `flink-jm`/`flink-tm`.
+  - `spark_job/job.py`: `spark.sql.shuffle.partitions` = `spark.shuffle_partitions` = **4**; checkpoint `/checkpoints/spark/<run_id>`; **không** gọi `withWatermark`; `sort_values("seq", kind="stable")` trong pandas UDF.
+- Chưa làm / lưu ý:
+  - Việc thống nhất `scripts/run_experiment.sh` (dùng `measure_perf.py`, network mặc định `p3`) **đã xử lý** ở mục 2026-10-25 bên dưới.
+  - Chưa build/chạy Docker trong phiên này (môi trường không có Docker CLI).
+
+## 2026-10-25 – [B] – Hoàn thiện Ưu tiên 0 & 1 sau merge: measure_quality v2, run_experiment.sh 7 bước, chấm MP của A
+- Công cụ: Cline (Claude)
+- Yêu cầu chính (rút gọn):
+  1. `measure/measure_quality.py` đúng yêu cầu của A (handover mục 2.1/2.3, Ưu tiên 1): cửa sổ `[start_ms, end_ms + 1 giờ]`, gộp theo `(engine, detector)`, detection delay lấy từ `recv_ts_ms`, **chịu được `seq`/`ingest_ts_ms`/`emit_ts_ms = null` và thiếu `recv_ts_ms`** (output `matrix_profile.py`, `half_space_trees.py`) mà không crash.
+  2. `scripts/run_experiment.sh <rq> <engine> <config> <lần>` theo đúng 7 bước trong handover, dùng `measure_perf.py` + network mặc định của compose.
+  3. Xoá `requirements-b.txt`, chạy 4 test không cần Docker của A, lấy thông số CPU/RAM của máy B, commit + push.
+- `measure/measure_quality.py` (v2):
+  - `load_alerts()`: bỏ bản ghi hỏng / thiếu `station_id|param|event_time_ms` (đếm rồi in ra stderr), chuẩn hoá `station_id`/`param` về str, thiếu `recv_ts_ms` thì điền NaN.
+  - **Sửa lỗi cũ:** `drop_duplicates(["engine","detector","seq"])` gộp *toàn bộ* alert của Matrix Profile thành **1 dòng** vì MP để `seq = null` (pandas coi NaN bằng nhau). Nay dedupe theo `(engine, detector, trạm, param, event_time_ms, round(score, 9))` — không phụ thuộc `seq`.
+  - Detection delay = `recv_ts_ms − ingest_ts_ms` của alert **sớm nhất đo được** trong cửa sổ. `ingest_ts_ms` đã có sẵn trong bản ghi alert nên **không cần `sent.csv`** nữa (`--sent` chỉ còn là nguồn dự phòng; `sent.csv` của producer là thống kê theo giây nên tự bỏ qua).
+  - Cột kết quả: `detection_delay_ms_{median,mean,p95}`, `detection_delay_n`, `detection_delay_hours_event_median`, `has_recv_ts_ms`; thiếu giờ máy thì NaN (CSV để trống) nhưng P/R/F1 vẫn tính; `--window-hours` mặc định 1.0.
+- `scripts/run_experiment.sh` (viết lại toàn bộ):
+  - Cú pháp `bash scripts/run_experiment.sh <rq0|rq1|rq2|rq3> <flink|spark> <config> <lần>`; `run_id = <rq>_<engine>_<config>_r<lần>` khớp regex của `measure_perf.parse_run_id`; từ chối chạy lại run_id đã có kết quả (trừ `FORCE=1`).
+  - 7 bước đúng handover: (1) `check_clock.sh` — lệch thì `exit 1`; (2) `docker compose stop` engine kia + `create_topics.sh` + xoá `/checkpoints/{flink,spark}/<run_id>`; (3) submit — Flink `flink run -d -py /opt/p3/flink_job/job.py --run-id <id>` (thêm `--delivery EXACTLY_ONCE` khi `DELIVERY=EXACTLY_ONCE`), Spark `spark-submit --master spark://spark-master:7077 --conf spark.cores.max=4 --conf spark.executor.cores=2 --conf spark.executor.memory=2400m --conf spark.sql.shuffle.partitions=4` (driver log `/tmp/p3_driver_<run_id>.log` trong container) rồi chờ job chạy; (4) `measure_perf.py collect --docker-stats` chạy nền; (5) producer: `rq0` replay `equiv_10k --speed 2000`, `rq1/rq3` `--mode rate --rate <R> --duration 210`, `rq2` replay OpenAQ `--late-fraction 0.05 --late-shift 1 4`, chia `--producer-id/--n-producers` khi `PRODUCERS>1`; (6) rq3 giết `flink-tm1`/`spark-worker-1` ở giây `KILL_AT_S=60` rồi `docker start`, ghi `kill_ts_ms` + `killed_container` vào `meta.json`; (7) hủy job (`flink cancel` / `pkill spark_job/job.py`), `summarize`, `measure_quality.py` nếu rq2, `check_clock.sh` lần cuối.
+  - Bỏ hẳn `measure/measure_latency.py` và `docker network connect p3-net` khỏi luồng chạy (giữ `measure_latency.py` trong repo làm tham khảo).
+  - `bash -n` trên bản LF: **OK**. (Các file `.sh` trong working tree là CRLF do `core.autocrlf=true`; blob trong git là LF.)
+- Chấm lại chất lượng trên `data/processed/labels.csv` (90 nhãn, cửa sổ `[start, end+1h]`, cùng một bộ chấm):
+
+  | engine | detector | alert | trong cửa sổ | phát hiện | P | R | F1 |
+  | --- | --- | --- | --- | --- | --- | --- | --- |
+  | offline | hst | 116 | 85 | 29/90 | 0.7328 | 0.3222 | 0.4476 |
+  | offline | zscore (ref) | 348 | 101 | 44/90 | 0.2902 | 0.4889 | 0.3642 |
+  | offline | ewma (ref) | 411 | 92 | 53/90 | 0.2238 | 0.5889 | 0.3244 |
+  | offline | mp (`matrix_profile.py` của A) | 162 | 8 | 8/90 | 0.0494 | 0.0889 | 0.0635 |
+
+  - HST ra đúng số cũ (0.7328 / 0.3222 / 0.4476) ⇒ merge không làm lệch cách chấm; MP không còn bị gộp thành 1 dòng.
+  - MP: 92,1 s cho 3 trạm, alert rải khắp chuỗi (trung vị 123 h trước nhãn; chỉ 19/90 nhãn có alert trong 24 h trước `start`) ⇒ kém do **ngưỡng phân vị 99 % lấy trên 20 % dữ liệu đầu + refractory = m**, không phải do bộ chấm. Cần A xem lại tham số (calib rộng hơn, hạ phân vị, hoặc so với `--causal`).
+- Cài thêm `stumpy==1.14.1` (+ `numba 0.68.0`, `llvmlite 0.50.0`) — đã ghim trong `requirements.txt` nhưng venv thiếu nên `sota/matrix_profile.py` không chạy được trước đó.
+- Test của A (không cần Docker), `PYTHONPATH=. python -m tests.<tên>`:
+  - `test_detector`: `events=1200 alerts=95 (zscore=45, ewma=50)`, `max|score diff| = 2.80e-12` → **PASS**.
+  - `test_producer`: rate 3 producer × 2999 sự kiện (mục tiêu 3000), replay lùi 118/1200 (~10 %) → **PASS**.
+  - `test_measure`: p50 66 ms / p99 13 795 ms, `dup_seq=100`, `missing_seq=1`, `recovery_s=25.0`, cảnh báo đồng hồ đúng → **PASS**.
+  - `test_mp`: 3 biến thể Matrix Profile chạy được trên chuỗi giả → **PASS**.
+- Thông số máy B (để chốt máy đo):
+  - Windows 11 Home, **AMD Ryzen 5 5600U — 6 core vật lý / 12 luồng**, **13,84 GB RAM**.
+  - WSL2 Ubuntu: **nproc = 8**, `MemTotal = 9 154 240 kB ≈ 8,73 GiB` (chưa có `.wslconfig` riêng); Docker Desktop đang Stop.
+  - **Cảnh báo:** compose hiện tại cần Kafka 2 CPU/3 GB + engine 4 CPU/(1,2 + 2×3,5 GB) = **~11,2 GB**, vượt RAM WSL (8,73 GB). Trước khi chạy RQ1/RQ3 phải tăng `memory=` trong `%UserProfile%\.wslconfig` (máy có 13,84 GB → đặt 10–11 GB) hoặc giảm Kafka xuống ~1,5–2 GB. CPU đủ (8 vCPU ≥ 6 core cần dùng).
+- Đã sửa gì so với AI: chấm cả 4 bộ alert trong **một** lần chạy (bảng trên) thay vì tin kết quả cũ; phát hiện và sửa lỗi dedupe `seq = null`; đổi detection delay sang hiệu `recv_ts_ms − ingest_ts_ms` để không phụ thuộc `sent.csv`; thêm kiểm tra `docker compose version`, chờ job RUNNING và `bash -n` trước khi commit.
+- Chưa làm: chưa build/`docker compose up` (môi trường này không có Docker CLI) nên phần submit Spark/Flink trong `run_experiment.sh` mới chỉ được kiểm tra cú pháp, chưa chạy thật.
+
+

@@ -150,6 +150,7 @@ Có hai loại bản ghi, phân biệt bằng trường `kind`:
 | `score` | z-score: giá trị z. EWMA: `(x - m) / sqrt(v)`. SOTA: điểm số của mô hình |
 | `emit_ts_ms` | Giờ máy lúc engine tạo bản ghi |
 | các trường còn lại | Chép nguyên từ sự kiện vào |
+| `recv_ts_ms` | **Không do engine phát.** `measure_perf.py` gắn giờ máy lúc consumer nhận bản ghi, rồi ghi vào `latency.csv` (probe) và `alerts.jsonl` (alert). Dùng cho độ trễ end-to-end và detection delay (mục 10.2) |
 
 Quy tắc phát bản ghi:
 
@@ -209,7 +210,7 @@ ngược lại: max_et = max(max_et, event_time_ms), rồi chạy 6.1 và 6.2
 Hệ quả cho các engine:
 
 - **Spark:** **không** gọi `withWatermark` trước bước stateful. Dùng `GroupStateTimeout.NoTimeout`.
-- **Flink:** vẫn gán timestamp. Watermark 10 giây chỉ để engine chạy bình thường, không dùng timer event-time.
+- **Flink:** không dùng timer event-time, nên **không gán timestamp/watermark** (`flink.assign_timestamps: false`). Đo thử: bỏ bước này + chạy Python ở thread mode (`flink.python_execution_mode: thread`) giúp PyFlink nhanh khoảng 2,5 lần mà output không đổi. Muốn bật lại thì đặt `assign_timestamps: true`.
 
 ### 6.4 Gợi ý cài đặt trên từng engine
 
@@ -325,7 +326,8 @@ Với dữ liệu trễ, quy tắc ở 6.3 giống hệt nhau ở hai engine, n�
 | Thư viện | `stumpy.stump`, m = 24 | `river.anomaly.HalfSpaceTrees(n_trees=25, height=15, window_size=250, seed=42)`, đặt sau `MinMaxScaler` |
 | Điểm số | Khoảng cách matrix profile. Gán cho mẫu **cuối** của đoạn con | `score_one` trước, rồi mới `learn_one` |
 | Ngưỡng | Phân vị 99% của điểm số trên 20% dữ liệu đầu, giống nhau cho cả hai, không dùng nhãn | như bên trái |
-| Output | `alerts.jsonl` cùng schema mục 5.2, `engine="offline"` | như bên trái |
+| Output | `alerts.jsonl` cùng schema mục 5.2, `engine="offline"`. Chạy offline nên `seq`, `ingest_ts_ms`, `emit_ts_ms` = `null`, không có `recv_ts_ms` | như bên trái |
+| Hậu xử lý | Sau mỗi alert bỏ qua m = 24 mẫu (`sota.mp.refractory`), vì một discord làm m đoạn con liên tiếp cùng có điểm cao | không áp dụng |
 
 ### 10.4 Cách đặt tên và lưu file
 
@@ -335,7 +337,7 @@ run_id = <rq>_<engine>_<cấu hình>_r<lần>       ví dụ: rq1_flink_rate2000
 results/raw/<run_id>/
     meta.json          # commit git, phiên bản, toàn bộ config.yaml, giờ bắt đầu/kết thúc
     latency.csv        # seq, ingest_ts_ms, emit_ts_ms, recv_ts_ms
-    alerts.jsonl       # mọi bản ghi kind=alert
+    alerts.jsonl       # mọi bản ghi kind=alert, THÊM recv_ts_ms (measure_perf.py gắn lúc nhận)
     sent.csv           # ts_ms, số sự kiện producer đã gửi (mỗi giây) — kiểm tra producer đạt tốc độ
     docker_stats.csv   # ts_ms, container, cpu_pct, mem_mb
     engine.log         # có số late_dropped

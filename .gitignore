@@ -1,8 +1,23 @@
 .venv/
+__pycache__/
+*.pyc
+.env
+
+# Dữ liệu: raw tải từ OpenAQ và parquet sinh ra không commit (README mục 2)
 data/raw/
 data/processed/*.parquet
+
+# Checkpoint streaming (Flink: /checkpoints/flink, Spark: /checkpoints/spark)
 checkpoints/
+
+# Jar tải từ Maven Central (README mục 1)
+docker/jars/*.jar
+
+# Log và thư mục tạm khi chạy local
 *.log
 smoke_result.txt
-__pycache__/
 out_smoke/
+
+# Điểm số thô của SOTA Matrix Profile (~1,6 MB/run, tái tạo bằng sota/matrix_profile.py)
+results/raw/*/scores.csv
+

@@ -1,0 +1,37 @@
+{
+  "run_id": "rq2_offline_mp_r1",
+  "method": "matrix_profile",
+  "variant": "mp",
+  "m": 24,
+  "normalize": true,
+  "causal": false,
+  "refractory": 24,
+  "calib_fraction": 0.2,
+  "threshold_quantile": 0.99,
+  "input": "data/processed/openaq_hn_injected.parquet",
+  "runtime_s": 92.11,
+  "n_alert": 162,
+  "series": [
+    {
+      "station_id": "hn_01",
+      "param": "pm25",
+      "n": 3439,
+      "threshold": 3.870757172245185,
+      "n_alert": 27
+    },
+    {
+      "station_id": "hn_02",
+      "param": "pm25",
+      "n": 8055,
+      "threshold": 2.96091155688171,
+      "n_alert": 85
+    },
+    {
+      "station_id": "hn_03",
+      "param": "pm25",
+      "n": 8074,
+      "threshold": 3.4179933298401637,
+      "n_alert": 50
+    }
+  ]
+}
