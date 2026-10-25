@@ -5,7 +5,7 @@ Repo: https://github.com/thanhmai2403/p3-streaming — nhánh `b/data`, PR **#1*
 
 **Tóm tắt (cập nhật 25/10/2026, sau khi chạy thử trên máy B):**
 - Đã xong **Ưu tiên 0, Ưu tiên 1** (handover_A mục 4) và thêm SOTA **Half-Space Trees**. PR **#1** (`b/data` → `main`).
-- **Tương đương qua file đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu (`max_diff = 0.00e+00`), so theo tập (`seq`, `detector`) đúng README mục 9. **Tương đương qua Kafka thật (`rq0`) đang chạy, chưa có kết quả** — chưa được coi là qua cổng; chưa so với Flink; chưa kiểm tra nhiều micro-batch và dữ liệu trễ cho Spark.
+- **Tương đương qua file đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu (`max_diff = 0.00e+00`), so theo tập (`seq`, `detector`) đúng README mục 9. **Tương đương qua Kafka thật: ĐÃ QUA CỔNG** — `rq0_spark_equiv_r1` chạy trên Docker thật (Kafka + Spark standalone 2 worker, `docker-compose.lowmem.yml`) ra **759/759**, `max_diff = 0.00e+00`, `probe = 100`, `bad = 0`, `dup_seq = 0`, `missing_seq = 0`; bằng chứng: `results/raw/rq0_spark_equiv_r1/{alerts.jsonl,latency.csv,meta.json}` + dòng `rq0_spark_equiv_r1` trong `results/summary/rq0.csv`. Còn lại: chưa so với Flink; chưa kiểm tra nhiều micro-batch và dữ liệu trễ cho Spark.
 - **Bảng chất lượng đã chấm lại trên toàn bộ 19 568 mẫu** (bản cũ chấm baseline trên `equiv_10k` nên Recall bị thấp giả). F1: `hst` 0,4476 ≈ `zscore` 0,4306 > `ewma` 0,3398 > `mp` 0,0635. HST và z-score chênh chỉ 0,017 với 90 nhãn, một lần chạy, nên **chưa kết luận hơn kém**.
 - **Máy B không đủ làm máy đo RQ1/RQ3** (mục 3.5): RAM máy 14,176 MB, WSL tối đa 8,7 GB, cấu hình đo cần ~11,2 GB. Đề xuất máy A là máy đo (mục 4.1). Máy B chạy `rq0`, `rq2` với `docker-compose.lowmem.yml`.
 - Docker đã chạy được trên máy B (WSL integration bật qua `settings-store.json`). Chưa có số liệu RQ1/RQ3 của Spark.
@@ -254,7 +254,7 @@ docker compose exec spark-master ls /checkpoints/spark/<run_id>   # checkpoint R
 
 ## 6. Việc B làm tiếp (theo thứ tự)
 
-1. Chạy `rq0 spark equiv 1` qua Kafka thật, với `docker-compose.lowmem.yml` (`COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`). Kết quả phải ra `TƯƠNG ĐƯƠNG 759/759`.
+1. ~~Chạy `rq0 spark equiv 1` qua Kafka thật~~ **ĐÃ XONG (25/10/2026)**: `rq0_spark_equiv_r1` với `docker-compose.lowmem.yml` (`COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`) → `TƯƠNG ĐƯƠNG 759/759`, `max_diff = 0.00e+00`, `probe = 100` (bằng chứng: `results/raw/rq0_spark_equiv_r1/`, `results/summary/rq0.csv`).
 2. Chạy `rq0 flink equiv 1` (hoặc nhờ A) và so **ba bên**: tham chiếu = Flink = Spark.
 3. Kiểm tra Spark với **nhiều micro-batch** (`maxFilesPerTrigger=1`, ~20 file) và với **dữ liệu trễ** (`late_dropped > 0`, bằng với bản tham chiếu).
 4. Chạy `rq2 spark replay 1` và `rq2 flink replay 1` trên máy B (điền `results/summary/rq2.csv`).

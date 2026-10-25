@@ -10,6 +10,8 @@ k = yaml.safe_load(open("config.yaml", encoding="utf-8"))["kafka"]
 print(k["topic_in"], k["topic_out"], k["partitions"], k["replication_factor"])
 EOF
 )
+# Python trên Windows in ra CRLF -> cắt '\r' để các giá trị truyền cho docker exec là số sạch ('1' chứ không phải '1\r')
+T_IN="${T_IN%$'\r'}"; T_OUT="${T_OUT%$'\r'}"; PARTS="${PARTS%$'\r'}"; RF="${RF%$'\r'}"
 
 kt() { docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 "$@"; }
 

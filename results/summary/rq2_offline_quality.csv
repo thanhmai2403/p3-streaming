@@ -1,5 +1,5 @@
 engine,detector,n_alerts,alerts_in_window,n_anomalies,detected,precision,recall,f1,detection_delay_ms_median,detection_delay_ms_mean,detection_delay_ms_p95,detection_delay_n,detection_delay_hours_event_median,has_recv_ts_ms
-offline,ewma,411,92,90,53,0.2238,0.5889,0.3244,,,,0,0.0,False
+offline,ewma,767,157,90,90,0.2047,1.0,0.3398,,,,0,0.0,False
 offline,hst,116,85,90,29,0.7328,0.3222,0.4476,,,,0,0.0,False
 offline,mp,162,8,90,8,0.0494,0.0889,0.0635,,,,0,1.0,False
-offline,zscore,348,101,90,44,0.2902,0.4889,0.3642,,,,0,0.0,False
+offline,zscore,589,168,90,79,0.2852,0.8778,0.4306,,,,0,0.0,False

@@ -43,6 +43,9 @@ cd "$REPO_ROOT"
 # Git Bash trên Windows tự dịch '/opt/...' -> 'C:/Program Files/Git/opt/...' (MSYS path conversion),
 # làm mọi lệnh `docker compose exec ... /opt/...` sai đường dẫn. Trên WSL biến này không có tác dụng.
 export MSYS_NO_PATHCONV=1
+# Cùng họ lỗi đó: python.exe/powershell.exe trên Git Bash in ra CRLF, nên MỌI giá trị lấy bằng
+# `$(...)` từ các chương trình này phải qua `| tr -d '\r'` (PER_RATE, KILL_MS bên dưới;
+# scripts/create_topics.sh và scripts/check_clock.sh đã làm tương tự). Trên WSL `tr` không đổi gì.
 COMPOSE=(docker compose -f "$REPO_ROOT/docker-compose.yml")
 # File override (máy B: docker-compose.lowmem.yml). COMPOSE_FILE dùng ':' (WSL) hoặc ';' (Windows).
 if [ -n "${COMPOSE_FILE:-}" ]; then
@@ -101,7 +104,7 @@ LABELS="${LABELS:-data/processed/labels.csv}"
 SPARK_PACKAGES="${SPARK_PACKAGES:-org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.3}"
 MASTER_URL="${MASTER_URL:-spark://spark-master:7077}"
 SPARK_EXECUTOR_MEMORY="${SPARK_EXECUTOR_MEMORY:-2400m}"  # phải <= SPARK_WORKER_MEMORY (lowmem: 1280m)
-SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-600m}"       # driver chạy chung spark-master (lowmem: <= 384m)
+SPARK_DRIVER_MEMORY="${SPARK_DRIVER_MEMORY:-600m}"       # driver chạy chung spark-master (lowmem: 512m, mem_limit 1300m)
 
 case "$ENGINE" in
   flink)
@@ -240,7 +243,8 @@ sleep 2
 
 # ------------------------------------------------------------- (5) producer
 log "[5/7] producer: $PRODUCERS tiến trình (tổng $RATE sự kiện/giây, ${DURATION_S}s)"
-PER_RATE=$("$PY" -c "print($RATE / $PRODUCERS)")
+# `tr -d '\r'`: python.exe trên Git Bash in CRLF -> PER_RATE sẽ là "2000.0\r" và producer nhận tham số rác.
+PER_RATE=$("$PY" -c "print($RATE / $PRODUCERS)" | tr -d '\r')
 
 prod_args_for() {
   local k=$1
@@ -266,7 +270,8 @@ if [ "$RQ" = "rq3" ]; then
   log "[6/7] rq3: sẽ giết container '$KILL_CT' ở giây $KILL_AT_S, start lại sau ${RESTART_AFTER_S}s"
   (
     sleep "$KILL_AT_S"
-    KILL_MS=$("$PY" -c 'import time; print(time.time_ns() // 1_000_000)')
+    # `tr -d '\r'` cùng lý do PER_RATE: '\r' trong meta.json sẽ làm summarize đọc kill_ts_ms lỗi.
+    KILL_MS=$("$PY" -c 'import time; print(time.time_ns() // 1_000_000)' | tr -d '\r')
     docker kill "$KILL_CT" >/dev/null 2>&1 || true
     KILL_MS="$KILL_MS" KILL_CT="$KILL_CT" RESTART_AFTER_S="$RESTART_AFTER_S" \
       "$PY" - "$OUT" <<'PY'

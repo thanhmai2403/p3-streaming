@@ -111,10 +111,24 @@ services:
   #   spark-worker = flink-taskmanager (2 core / 3,5 GB mỗi cái) -> tổng 4 core xử lý
   # MỖI LẦN CHỈ BẬT MỘT ENGINE (worker-1 dùng cổng UI 8081 trùng flink-jm).
   # Giới hạn RAM của worker để 3072m cho JVM, phần còn lại cho Python worker (pandas UDF).
+  # LƯU Ý: image apache/spark:4.1.3 có ENTRYPOINT=/opt/entrypoint.sh và CMD=null; entrypoint chỉ xử lý
+  # riêng 'driver'/'executor', mọi lệnh khác rơi vào nhánh `*) exec "$@"` (pass-through). Thiếu `command`
+  # -> entrypoint exec rỗng -> container exit 0 ngay, cluster không bao giờ lên. Vì vậy mỗi service
+  # phải khai báo tường minh daemon chạy FOREGROUND qua spark-class (không daemonize, không cần sbin/).
+  # Heap của chính daemon/master vẫn lấy từ SPARK_DAEMON_MEMORY (SparkClassCommandBuilder đọc env này).
   spark-master:
     <<: *spark
     container_name: spark-master
     hostname: spark-master
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
     environment:
       P3_CONFIG: /opt/p3/config.yaml
       PYTHONPATH: /opt/p3
@@ -139,10 +153,18 @@ services:
     mem_limit: 1200m
 
   # Đặt tên riêng để RQ3 kill đúng 1 container (docker kill spark-worker-1).
+  # Worker chạy foreground qua spark-class; số core và RAM QUẢNG CÁO vẫn lấy từ
+  # SPARK_WORKER_CORES / SPARK_WORKER_MEMORY trong `environment` bên dưới (Worker đọc env này).
   spark-worker-1:
     <<: *spark
     container_name: spark-worker-1
     hostname: spark-worker-1
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - --webui-port
+      - "8081"
+      - spark://spark-master:7077
     environment:
       P3_CONFIG: /opt/p3/config.yaml
       PYTHONPATH: /opt/p3
@@ -166,6 +188,13 @@ services:
     <<: *spark
     container_name: spark-worker-2
     hostname: spark-worker-2
+    # `--webui-port` ghi đè env SPARK_WORKER_WEBUI_PORT nên phải khớp 8082 (host publish 8082:8082).
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - --webui-port
+      - "8082"
+      - spark://spark-master:7077
     environment:
       P3_CONFIG: /opt/p3/config.yaml
       PYTHONPATH: /opt/p3
