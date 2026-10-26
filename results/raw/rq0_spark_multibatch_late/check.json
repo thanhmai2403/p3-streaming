@@ -16,6 +16,8 @@
   "events_per_file_max": 979,
   "max_files_per_trigger": 1,
   "micro_batches": 20,
+  "state_store": "rocksdb",
+  "state_store_provider": "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider",
   "late_dropped_ref": 544,
   "late_dropped_spark": 544,
   "n_alert_ref": 1325,

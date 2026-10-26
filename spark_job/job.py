@@ -395,6 +395,11 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
     ckpt_dir = work / "ckpt"
     spark = build_spark(cfg, "equiv_check", master=master, packages=packages,
                         force_no_rocksdb=force_no_rocksdb)
+    # Ghi lại state store THỰC TẾ đang dùng (RocksDB hay provider mặc định) vào bằng
+    # chứng: test nhiều micro-batch chỉ có nghĩa nếu state được lưu/đọc lại qua state store.
+    provider = spark.conf.get("spark.sql.streaming.stateStore.providerClass", "default")
+    state_store = "rocksdb" if "RocksDB" in provider else "default"
+    print(f"[test-parquet-spark] state store: {state_store} ({provider})", flush=True)
     try:
         if dir_input:
             # Đầu vào đã chuẩn bị sẵn: MỖI file là một khối sự kiện liên tiếp theo seq.
@@ -475,7 +480,8 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
         n_probe = sum(1 for r in records if r["kind"] == "probe")
         info = {"n_records": len(records), "n_alert": n_alert, "n_probe": n_probe,
                 "late_dropped": int(late_acc.value), "n_batch": int(n_batch),
-                "n_input_files": len(src_files)}
+                "n_input_files": len(src_files), "state_store": state_store,
+                "state_store_provider": provider}
         print(f"[test-parquet-spark] {len(src_files)} file đầu vào -> {n_batch} micro-batch: "
               f"{len(records)} bản ghi ({n_alert} alert + {n_probe} probe), "
               f"late_dropped={info['late_dropped']}")

@@ -217,3 +217,12 @@
 - Chưa làm: `rq2 flink replay` (cần jar connector Flink Kafka bị `.gitignore`), RQ1/RQ3 của Spark; chưa chạy lại RQ2 với `REPLAY_SPEED` thấp để đo độ trễ ổn định.
 
 
+### Bổ sung cùng ngày (26/10/2026) — xác nhận **state store thật** của bài test nhiều micro-batch
+
+- Yêu cầu chính: mục 6.3 handover_B ghi rõ "Spark Structured Streaming (`applyInPandasWithState` thật với **RocksDB state store**)", nhưng lần chạy trước chỉ dựa vào `build_spark()` (tự fallback provider mặc định khi thiếu native lib) và **bằng chứng không ghi lại đã dùng provider nào** ⇒ chưa chứng minh được phần "trên RocksDB".
+- `spark_job/job.py::run_test_parquet_spark`: đọc `spark.conf.get("spark.sql.streaming.stateStore.providerClass", "default")` **sau** `build_spark()`, in ra và trả thêm `state_store` (`rocksdb`/`default`) + `state_store_provider` trong `info` ⇒ `check.json` có bằng chứng, không chỉ log.
+- `tests/test_spark_multibatch_late.py`: in `state_store` ở dòng kết quả, ghi vào `check.json`, đưa vào điều kiện `ok` và thêm **assert cứng** `state_store == "rocksdb"` (chạy ngoài image `p3-spark` không có native lib sẽ **fail rõ ràng** thay vì lặng lẽ pass với provider mặc định — đúng mục 3.8).
+- Chạy lại thật (`docker run … p3-spark:4.1.3 python3 -m tests.test_spark_multibatch_late`): `state store: RocksDB (org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider)`; 20 file → **20 micro-batch**; 1325 alert + 188 probe; `late_dropped = 544` = tham chiếu; `only_ref = 0`, `only_spark = 0`, `score_mismatch = 0`, `max_diff = 0.00e+00`; in `SPARK_MULTIBATCH_LATE_OK`; `check.json` có `state_store = rocksdb`, `ok = true`.
+- Thư mục tạm `checkpoints/_multibatch_check` và `checkpoints/_equiv_check` đã bị xoá (trong `finally` của `run_test_parquet_spark` + cuối test); `checkpoints/` chỉ còn `_smoke` của bài smoke streaming trước đó (đã gitignore).
+
+

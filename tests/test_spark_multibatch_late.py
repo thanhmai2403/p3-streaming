@@ -108,7 +108,8 @@ cmp = compare_pair("offline", sa, "spark", sb)
 probe_spark = sum(1 for line in out_path.read_text(encoding="utf-8").splitlines()
                   if line.strip() and json.loads(line).get("kind") == "probe")
 print(f"[multibatch] spark: {cmp['n_b']} alert + {probe_spark} probe, "
-      f"{info['n_batch']} micro-batch, late_dropped={info['late_dropped']}")
+      f"{info['n_batch']} micro-batch, late_dropped={info['late_dropped']}, "
+      f"state_store={info['state_store']}")
 print(f"[multibatch] so với tham chiếu: only_ref={cmp['n_only_a']} only_spark={cmp['n_only_b']} "
       f"score_mismatch={cmp['n_score_mismatch']} max|score diff|={cmp['max_score_diff']:.2e}")
 
@@ -127,6 +128,8 @@ evidence = {
     "events_per_file_max": max(sizes),
     "max_files_per_trigger": 1,
     "micro_batches": info["n_batch"],
+    "state_store": info["state_store"],
+    "state_store_provider": info["state_store_provider"],
     "late_dropped_ref": late_ref,
     "late_dropped_spark": info["late_dropped"],
     "n_alert_ref": cmp["n_a"],
@@ -138,7 +141,8 @@ evidence = {
     "n_score_mismatch": cmp["n_score_mismatch"],
     "max_score_diff": cmp["max_score_diff"],
     "ok": bool(cmp["ok"] and late_ref > 0 and info["late_dropped"] == late_ref
-               and probe_ref == probe_spark and info["n_batch"] >= 2),
+               and probe_ref == probe_spark and info["n_batch"] >= 2
+               and info["state_store"] == "rocksdb"),
 }
 (OUT_DIR / "check.json").write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n",
                                     encoding="utf-8")
@@ -151,4 +155,7 @@ assert info["late_dropped"] == late_ref, (f"late_dropped Spark={info['late_dropp
 assert info["n_batch"] >= 2, f"chỉ có {info['n_batch']} micro-batch -> chưa kiểm tra được state"
 assert cmp["ok"], cmp
 assert probe_ref == probe_spark, (probe_ref, probe_spark)
+assert info["state_store"] == "rocksdb", (
+    f"state store = {info['state_store']} ({info['state_store_provider']}) -> phải chạy "
+    "trong image p3-spark (có native lib RocksDB), xem handover_B mục 3.8")
 print("SPARK_MULTIBATCH_LATE_OK")
