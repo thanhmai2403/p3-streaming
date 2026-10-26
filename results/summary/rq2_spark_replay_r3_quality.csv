@@ -1,0 +1,3 @@
+engine,detector,n_alerts,alerts_in_window,n_anomalies,detected,precision,recall,f1,detection_delay_ms_median,detection_delay_ms_mean,detection_delay_ms_p95,detection_delay_n,detection_delay_hours_event_median,has_recv_ts_ms
+spark,ewma,753,153,90,90,0.2032,1.0,0.3377,31732.0,31599.533333333333,35529.95,90,0.0,True
+spark,zscore,572,161,90,77,0.2815,0.8556,0.4236,31356.0,31422.64935064935,35532.0,77,0.0,True

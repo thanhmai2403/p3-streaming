@@ -1,0 +1,30 @@
+{
+  "check": "Spark nhieu micro-batch + du lieu tre (README 6.3 / handover_B muc 6 viec 3)",
+  "input": "data/processed/openaq_hn_injected.parquet",
+  "seed": 42,
+  "late_fraction": 0.05,
+  "late_shift": [
+    1,
+    4
+  ],
+  "late_tolerance_ms": 7200000,
+  "n_events": 19568,
+  "n_keys": 3,
+  "n_events_later_than_tolerance": 544,
+  "n_input_files": 20,
+  "events_per_file_min": 978,
+  "events_per_file_max": 979,
+  "max_files_per_trigger": 1,
+  "micro_batches": 20,
+  "late_dropped_ref": 544,
+  "late_dropped_spark": 544,
+  "n_alert_ref": 1325,
+  "n_alert_spark": 1325,
+  "n_probe_ref": 188,
+  "n_probe_spark": 188,
+  "n_only_ref": 0,
+  "n_only_spark": 0,
+  "n_score_mismatch": 0,
+  "max_score_diff": 0.0,
+  "ok": true
+}

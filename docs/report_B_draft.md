@@ -268,6 +268,39 @@ thấp và MP cảnh báo trên các *discord tự nhiên*; cộng thêm `refrac
 hiệu chỉnh ngưỡng quan trọng ngang với bản thân thuật toán**, và một ngưỡng hiệu chỉnh trên cửa sổ dữ
 liệu không đại diện sẽ phá huỷ chất lượng dù thuật toán mạnh.
 
+### 5.5 Kết quả RQ2 phía Spark (3 lần lặp qua Kafka)
+
+Ba lần `rq2 spark replay` chạy trên cùng cấu hình (6 partition, 2 worker × 2 core, driver 512 MB,
+executor 1 024 MB), đều qua `check_clock.sh` **trước và sau** khi đo (`clock_ok = true`),
+`dup_seq = 0`:
+
+| engine | detector | Precision | Recall | F1 | delay trung vị (ms) | delay p95 (ms) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `spark` | `zscore` | 0,2815 | 0,8556 | **0,4236** | 28 652 | 32 597 |
+| `spark` | `ewma` | 0,2032 | **1,0000** | 0,3377 | 28 940 | 32 595 |
+
+Ba điểm đáng chú ý:
+
+1. **Chất lượng là đại lượng xác định.** Ba lần lặp cho **cùng** P/R/F1 (chỉ độ trễ đổi: p50 của
+   run là 27 740 / 25 584 / 30 987 ms), vì luồng sự kiện và quy tắc trễ không phụ thuộc thời điểm
+   chạy. Ở RQ2, lặp lại có ý nghĩa với **phân bố độ trễ**, không phải với chất lượng phát hiện —
+   khác với RQ1/RQ3 nơi cả hai đại lượng đều biến thiên.
+2. **Streaming ≈ offline, phần chênh có nguyên nhân.** So cùng bộ chấm, z-score giảm F1 0,4306 →
+   **0,4236** (77 thay vì 79 alert đúng), EWMA 0,3398 → **0,3377**. Nguyên nhân là **544 sự kiện bị
+   bỏ vì trễ** theo quy tắc 4.4: chuỗi trạng thái (cửa sổ 24 mẫu của z-score, EWMA) lệch đi đúng ở
+   các vị trí đó. Đây là **giá phải trả của quy tắc không chờ**, không phải sai số đo.
+3. **`missing_seq = 8/196` probe (4,1 %) không phải lỗi.** Probe rơi vào sự kiện bị bỏ trễ thì không
+   bao giờ tới sink; con số này **trùng bản chất** với `late_dropped` nên ở RQ2 không dùng để đánh
+   giá tính đúng đắn (chỉ dùng ở RQ0/RQ3, nơi dữ liệu không bị làm trễ).
+
+**Cách đọc độ trễ ở RQ2 (quan trọng).** Producer phát lại ở 2 000 sự kiện/giây nên **toàn bộ 19 568
+sự kiện vào Kafka trong ~11 s**, trong khi cửa sổ đo dài 180 s và bắt đầu sau 30 s warm-up. Vì vậy độ
+trễ 26–31 s phản ánh **thời gian xả hàng đợi** (~640–750 sự kiện/giây thực tế, vượt năng lực 2 worker
+× 2 core), **không** phải độ trễ trạng thái ổn định. Cũng vì cửa sổ gần như rỗng sau warm-up mà
+`median_last30_ms = NaN` ⇒ `drift_ok = False` ⇒ `sustainable = False` và `sent_rate_ev_s` trống; các
+trường này **không dùng được cho RQ2** và chỉ được lấy từ RQ1. Muốn đo độ trễ ổn định ở RQ2 phải giảm
+`REPLAY_SPEED` để replay trải hết cửa sổ đo.
+
 ---
 
 ## 8. Giới hạn của nghiên cứu
@@ -315,7 +348,16 @@ JobManager/master, không khảo sát mất broker (Kafka cấu hình **1 broker
 chỉ trả lời được câu hỏi "mất một phần năng lực xử lý thì sao", không trả lời câu hỏi về tính sẵn sàng
 của toàn hệ thống.
 
-**8.9. Cắt giảm so với kế hoạch ban đầu.** Đề xuất 4 tuần dự kiến có thêm: cài đặt Java để so với bản
+**8.10. Cách phát lại dữ liệu ở RQ2 tạo ra "burst".** Producer phát lại theo **sự kiện/giây**, không
+theo khoảng cách thời gian gốc, nên ở 2 000 sự kiện/giây toàn bộ 19 568 sự kiện của một năm dữ liệu
+giờ dồn vào Kafka trong **~11 s** thay vì trải trên cửa sổ đo 180 s. Hệ quả: (a) độ trễ đo được là
+**thời gian xả hàng đợi**, không phải độ trễ trạng thái ổn định; (b) các trường `throughput` và
+`sustainable` của `rq2.csv` **không dùng được** (cửa sổ gần rỗng sau warm-up); (c) độ trễ RQ2 **không
+so sánh trực tiếp** được với RQ1 vốn dùng `--mode rate`. Ba lần lặp cùng tốc độ nên vẫn so sánh được
+với nhau. Muốn đo độ trễ ổn định cho RQ2 phải chọn `REPLAY_SPEED` sao cho thời gian phát lại xấp xỉ
+cửa sổ đo (ví dụ ~110 sự kiện/giây cho 180 s) — việc này chưa thực hiện trong đợt đo này.
+
+**8.11. Cắt giảm so với kế hoạch ban đầu.** Đề xuất 4 tuần dự kiến có thêm: cài đặt Java để so với bản
 Python, chạy trên Kubernetes nhiều node, đo autoscaling, và dashboard giám sát trực tiếp. Các mục này bị
 cắt để kịp tiến độ; chúng được nêu ở phần Hướng phát triển thay vì được đo trong bài.
 

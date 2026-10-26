@@ -187,4 +187,33 @@
 - Chưa làm: chưa chạy `rq0 flink equiv 1` (máy B chưa có jar connector Flink Kafka `docker/jars/flink-sql-connector-kafka-5.0.0-2.2.jar` — tệp này bị `.gitignore`, phải tải riêng); chưa có RQ1/RQ3.
 
 
+## 2026-10-26 – [B] – RQ2 Spark ×3 qua Kafka; cổng nhiều micro-batch + dữ liệu trễ; sửa 4 lỗi ẩn của `create_topics.sh`
+- Công cụ: Cline (Claude)
+- Yêu cầu chính (rút gọn): (1) chạy `rq2 spark replay` đủ **3 lần lặp** trên máy B rồi chấm chất lượng, vẽ lại hình và cập nhật tài liệu; (2) hoàn thành việc 3 mục 6 handover (Spark với **nhiều micro-batch** + **dữ liệu trễ**); (3) làm chuỗi script chạy được trên **Git Bash/Windows** mà không phải sửa tay từng bước.
+- Kết quả chạy thật `bash scripts/run_experiment.sh rq2 spark replay {1,2,3}` (`docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`, `REPLAY_SPEED=2000`):
+  - Cả 3 run `EXIT=0`; `clock_ok=true` ở cả lần kiểm tra **trước và sau** khi đo; `dup_seq=0`; `n_probe_window=188`; `missing_seq=8/196` (probe rơi đúng vào sự kiện bị bỏ trễ, cùng bản chất `late_dropped=544`).
+  - Chất lượng (`results/summary/rq2_spark_replay_r<n>_quality.csv`): z-score P 0,2815 / R 0,8556 / **F1 0,4236**; EWMA P 0,2032 / R 1,0000 / **F1 0,3377** — **giống tuyệt đối ở cả 3 lần** (luồng sự kiện + quy tắc trễ là xác định), chỉ độ trễ đổi (p50 theo run: 27 740 / 25 584 / 30 987 ms; delay trung vị mỗi run 25,6–31,0 s).
+  - So với bản offline cùng bộ chấm: F1 z-score 0,4306 → **0,4236** (−0,0070; 77 thay vì 79 alert đúng), EWMA 0,3398 → 0,3377. Nguyên nhân xác định: **544 sự kiện bị bỏ vì trễ** làm chuỗi trạng thái lệch ở đúng các vị trí đó ⇒ ghi thành kết luận "giá phải trả của quy tắc không chờ", không phải sai số.
+  - `sent_rate_ev_s = null`, `sustainable = false`, `median_last30_ms = NaN` trong `results/summary/rq2.csv`: producer gửi xong ở giây ~13 còn cửa sổ đo bắt đầu sau warm-up 30 s ⇒ 30 s cuối **không còn sự kiện**. Đã ghi cảnh báo "chỉ dùng `lat_*`/chất lượng ở RQ2, thông lượng–bền vững lấy từ RQ1" trong `handover_B` 2.2b và `report_B_draft` 5.5 + giới hạn 8.10.
+- `scripts/aggregate_quality.py` (**mới**): gộp `<rq>_<engine>_<cfg>_r*_quality.csv` thành 1 dòng / (engine, detector) = trung bình các lần, thêm `<cột>_std`, `n_reps`, `runs`; ghi `results/summary/rq2_spark_replay_quality.csv`. Lý do phải có: `plot_results.py::load_quality` bỏ trùng theo `(engine, detector)` với `keep="first"` theo thứ tự ABC, nên nếu chỉ có file từng lần thì hình chỉ phản ánh **r1**; tên file gộp (`..._quality.csv`, `q` < `r`) đứng trước `..._r1_quality.csv` nên hình vẽ **trung bình 3 lần**.
+- **Bốn lỗi ẩn của `scripts/create_topics.sh`** (đều làm `run_experiment.sh` dừng ở bước **[2/7]**):
+  1. Gọi thẳng `python3`: Git Bash trên Windows chỉ có **alias Microsoft Store** ⇒ `Python was not found…` + exit 1 ⇒ `set -e` dừng script. Nay chọn Python như `run_experiment.sh` (`.venv/Scripts/python.exe` → `.venv/bin/python` → `python3`).
+  2. `[ "$left" = "0" ] && break` dưới `set -e`: khi Kafka **chưa** xoá xong topic (xoá bất đồng bộ) thì cả pipeline trả mã 1 ⇒ script thoát **im lặng**. Nay `if … then break; fi` và báo lỗi rõ nếu quá 30 s.
+  3. Thiếu `export MSYS_NO_PATHCONV=1`: khi gọi trực tiếp, `/opt/kafka/bin/...` bị dịch thành `C:/Program Files/Git/opt/...`.
+  4. `kafka-topics.sh --describe --topic "sensor|alerts"`: `--describe` **không** nhận regex ⇒ báo "topic does not exist"; nay `--describe` riêng từng topic.
+- `scripts/run_experiment.sh`: `REPLAY_SPEED` mặc định **2000** (producer `--mode replay` bắt buộc có `--speed`, trước đây thiếu nên bước 5 lỗi argparse).
+- `spark_job/job.py`: `--test-parquet-spark` nhận **thư mục** nhiều `part-*.parquet` (mỗi file một khối `seq` liên tiếp) + `--max-files-per-trigger`; `tests/test_spark_multibatch_late.py` (mới) dùng hai tham số này để tạo **20 micro-batch**.
+- Đã kiểm tra bằng:
+  - `python scripts/aggregate_quality.py --engine spark --cfg replay --reps 3` → bảng trung bình 3 lần (z-score F1 0,4236, delay trung vị 28 652 ms; EWMA F1 0,3377, delay 28 940 ms), `AGG_EXIT=0`.
+  - `python scripts/plot_results.py` → `[plot] RQ2: 6 phương pháp` (hst, mp, zscore, ewma offline + spark/zscore + spark/ewma), 4 file PNG/PDF trong `results/plots/`; `python scripts/plot_results.py --check` → **CHECK OK**.
+  - `bash scripts/create_topics.sh` → exit 0, `--describe` xác nhận **6 partition** cho cả `sensor` và `alerts`.
+  - `docker run … p3-spark:4.1.3 python3 -m tests.test_spark_multibatch_late` → 20 micro-batch, `late_dropped=544` = tham chiếu, 1325 alert + 188 probe, `only=0/0`, `score_mismatch=0`, `max_diff=0.00e+00`, in `SPARK_MULTIBATCH_LATE_OK`; bằng chứng `results/raw/rq0_spark_multibatch_late/`.
+- Đã sửa gì so với AI:
+  - Giữ **cùng `REPLAY_SPEED=2000`** cho cả 3 lần (không đổi giữa chừng) để 3 lần so sánh được với nhau; **không** chỉnh tay file trong `results/raw/` (đúng README 10.4) — sai thì chạy lại với số `r` mới.
+  - **Không** thêm cột chất lượng vào `rq2.csv` (file đó là hiệu năng, do `measure_perf.py` ghi); chất lượng để ở `*_quality.csv` + file gộp riêng.
+  - `scripts/aggregate_quality.py`: loại cột **bool** (`has_recv_ts_ms`) khỏi phần lấy trung bình (bản đầu biến nó thành `1.0` + cột `_std` vô nghĩa).
+  - Ghi lại **cảnh báo burst** thay vì chỉ báo con số đẹp: 19 568 sự kiện/11 s ⇒ độ trễ RQ2 là thời gian xả hàng đợi, muốn đo độ trễ ổn định phải giảm `REPLAY_SPEED` (~110 sự kiện/giây cho 180 s).
+- Cập nhật tài liệu: `handover_B` §1.3 (thêm `scripts/aggregate_quality.py`), **§2.2b mới** (bảng RQ2 streaming + cách đọc số), §3.8 (4 lỗi `create_topics.sh`), §5 (lệnh gộp chất lượng), §6 việc 4 (RQ2 Spark xong, còn Flink); `report_B_draft` **§5.5 mới** + giới hạn **8.10**; hình `results/plots/rq2_quality_comparison.{png,pdf}` vẽ lại với 6 nhóm cột.
+- Chưa làm: `rq2 flink replay` (cần jar connector Flink Kafka bị `.gitignore`), RQ1/RQ3 của Spark; chưa chạy lại RQ2 với `REPLAY_SPEED` thấp để đo độ trễ ổn định.
+
 

@@ -32,6 +32,14 @@ Cách chạy:
         --a-file data/processed/ref_alerts.jsonl \
         --b-file data/processed/spark_alerts.jsonl \
         --ref offline --a offline --b spark
+
+    # 4) Kiểm thử NHIỀU micro-batch + DỮ LIỆU TRẾ (README 6.3, handover_B mục 6 việc 3):
+    #    --test-parquet-spark nhận 1 THƯ MỤC nhiều file part-*.parquet đã có cột seq
+    #    (mỗi file = 1 khối seq liên tiếp) + --max-files-per-trigger => mỗi micro-batch
+    #    chỉ đọc N file, nên state phải được lưu/đọc lại giữa các batch.
+    #    Không cần gõ tay: xem tests/test_spark_multibatch_late.py
+    #      (sinh 20 file từ producer.replay_order 5 % trễ, chạy Spark,
+    #       so với common/detectors_ref.py và so số late_dropped).
 """
 import argparse
 import json
@@ -343,12 +351,20 @@ def run_test_parquet(cfg, input_path, output_path, with_probes, batch_size):
 
 
 def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=None,
-                           force_no_rocksdb=False):
+                           force_no_rocksdb=False, max_files_per_trigger=None):
     """Chạy applyInPandasWithState THẬT (Spark Structured Streaming) trên parquet.
 
     File source (trigger once = xử lý hết dữ liệu có sẵn rồi dừng) ->
     groupBy("station_id", "param") -> applyInPandasWithState (y hệt build_query)
     -> sink JSON file (append) -> gộp part-*.json thành file .jsonl (thứ tự seq).
+
+    `input_path` nhận 1 trong 2 dạng:
+      - 1 file parquet (như equiv_10k.parquet): file không có cột seq/ingest_ts_ms,
+        seq được sinh bằng thứ tự dòng vật lý trong file (xem chú thích bên dưới);
+      - 1 THƯ MỤC nhiều file part-*.parquet đã có sẵn cột seq, mỗi file là một khối
+        sự kiện LIÊN TIẾP theo seq (thứ tự file = thứ tự seq). Dùng chung với
+        `max_files_per_trigger` để kiểm tra nhiều micro-batch + dữ liệu trễ
+        (tests/test_spark_multibatch_late.py).
     """
     import shutil
 
@@ -360,8 +376,15 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
     from common.schema import spark_record_struct
 
     src = Path(input_path).resolve()
-    if not src.is_file():
+    dir_input = src.is_dir()
+    if dir_input:
+        src_files = sorted(src.glob("*.parquet"))
+        if not src_files:
+            raise SystemExit(f"Thư mục không có file parquet nào: {src}")
+    elif not src.is_file():
         raise SystemExit(f"Không tìm thấy parquet đầu vào: {src}")
+    else:
+        src_files = [src]
     # checkpoint dùng riêng thư mục local (cfg["spark"]["checkpoint_dir"] là đường
     # dẫn trong container, không dùng được khi chạy ngoài Docker trên Windows).
     work = Path(__file__).resolve().parent.parent / "checkpoints" / "_equiv_check"
@@ -373,14 +396,26 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
     spark = build_spark(cfg, "equiv_check", master=master, packages=packages,
                         force_no_rocksdb=force_no_rocksdb)
     try:
-        # equiv_10k.parquet không có cột seq/ingest_ts_ms; bản tham chiếu tạo
-        # seq = thứ tự dòng vật lý trong file, ingest_ts_ms = null. File 121KB,
-        # 1 row group -> Spark đọc 1 partition -> thứ tự dòng giữ nguyên, vậy
-        # monotonically_increasing_id() == chỉ số dòng của bản tham chiếu.
-        df = (spark.read.parquet(str(src))
-              .withColumn("seq", F.monotonically_increasing_id())
-              .withColumn("ingest_ts_ms", F.lit(None).cast(LongType())))
-        df.coalesce(1).write.mode("overwrite").parquet(str(in_dir))
+        if dir_input:
+            # Đầu vào đã chuẩn bị sẵn: MỖI file là một khối sự kiện liên tiếp theo seq.
+            # Chép NGUYÊN tên file (part-00000, part-00001, ...) vào thư mục nguồn của
+            # query để thứ tự đọc trùng thứ tự seq (Spark đọc file theo thứ tự tên).
+            cols = set(spark.read.parquet(str(src)).columns)
+            thieu = {"seq", "ingest_ts_ms", "event_time_ms"} - cols
+            if thieu:
+                raise SystemExit(f"thư mục {src} thiếu cột {sorted(thieu)}")
+            in_dir.mkdir(parents=True, exist_ok=True)
+            for f in src_files:
+                shutil.copy2(f, in_dir / f.name)
+        else:
+            # equiv_10k.parquet không có cột seq/ingest_ts_ms; bản tham chiếu tạo
+            # seq = thứ tự dòng vật lý trong file, ingest_ts_ms = null. File 121KB,
+            # 1 row group -> Spark đọc 1 partition -> thứ tự dòng giữ nguyên, vậy
+            # monotonically_increasing_id() == chỉ số dòng của bản tham chiếu.
+            df = (spark.read.parquet(str(src))
+                  .withColumn("seq", F.monotonically_increasing_id())
+                  .withColumn("ingest_ts_ms", F.lit(None).cast(LongType())))
+            df.coalesce(1).write.mode("overwrite").parquet(str(in_dir))
 
         in_schema = StructType([
             StructField("station_id", StringType(), True),
@@ -390,7 +425,12 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
             StructField("ingest_ts_ms", LongType(), True),
             StructField("seq", LongType(), True),
         ])
-        events = (spark.readStream.schema(in_schema).parquet(str(in_dir))
+        reader = spark.readStream.schema(in_schema)
+        if max_files_per_trigger:
+            # Nhiều micro-batch: mỗi trigger chỉ đọc tối đa N file -> state phải được
+            # lưu xuống / đọc lại từ state store giữa các micro-batch (README 6.3).
+            reader = reader.option("maxFilesPerTrigger", int(max_files_per_trigger))
+        events = (reader.parquet(str(in_dir))
                   .filter(F.col("station_id").isNotNull()
                           & F.col("value").isNotNull()
                           & F.col("seq").isNotNull()))
@@ -403,11 +443,19 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
         q = (results.coalesce(1)
              .writeStream.format("json")
              .outputMode("append")
-             .trigger(once=True)
              .option("path", str(out_dir))
-             .option("checkpointLocation", str(ckpt_dir))
-             .start())
-        q.awaitTermination()
+             .option("checkpointLocation", str(ckpt_dir)))
+        if max_files_per_trigger:
+            # trigger once chỉ chạy 1 micro-batch (mà mỗi batch bị giới hạn N file) ->
+            # dùng trigger theo thời gian + processAllAvailable() để chạy HẾT các file.
+            q = q.trigger(processingTime="1 second").start()
+            q.processAllAvailable()
+            n_batch = len(q.recentProgress)
+            q.stop()
+        else:
+            q = q.trigger(once=True).start()
+            q.awaitTermination()
+            n_batch = len(q.recentProgress)
         exc = q.exception()
         if exc is not None:
             raise RuntimeError(f"query lỗi: {exc}")
@@ -425,9 +473,14 @@ def run_test_parquet_spark(cfg, input_path, output_path, master=None, packages=N
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         n_alert = sum(1 for r in records if r["kind"] == "alert")
         n_probe = sum(1 for r in records if r["kind"] == "probe")
-        print(f"[test-parquet-spark] {len(records)} bản ghi ({n_alert} alert + "
-              f"{n_probe} probe), late_dropped={late_acc.value}")
+        info = {"n_records": len(records), "n_alert": n_alert, "n_probe": n_probe,
+                "late_dropped": int(late_acc.value), "n_batch": int(n_batch),
+                "n_input_files": len(src_files)}
+        print(f"[test-parquet-spark] {len(src_files)} file đầu vào -> {n_batch} micro-batch: "
+              f"{len(records)} bản ghi ({n_alert} alert + {n_probe} probe), "
+              f"late_dropped={info['late_dropped']}")
         print(f"[test-parquet-spark] ghi {out_path}")
+        return info
     finally:
         spark.stop()
         shutil.rmtree(work, ignore_errors=True)
@@ -455,7 +508,11 @@ def main():
                     help="kiểm thử offline: chạy hàm state trên parquet rồi thoát")
     ap.add_argument("--test-parquet-spark", default=None,
                     help="kiểm thử tương đương: chạy applyInPandasWithState THẬT "
-                         "(Spark Structured Streaming, trigger once) trên parquet")
+                         "(Spark Structured Streaming, trigger once) trên parquet "
+                         "hoặc trên 1 THƯ MỤC nhiều file parquet đã có cột seq")
+    ap.add_argument("--max-files-per-trigger", type=int, default=None,
+                    help="(--test-parquet-spark) số file tối đa đọc mỗi micro-batch; "
+                         "đặt 1 để kiểm tra nhiều micro-batch + dữ liệu trễ (README 6.3)")
     ap.add_argument("--output", default=None, help="file .jsonl cho --test-parquet")
     ap.add_argument("--with-probes", action="store_true",
                     help="(--test-parquet) phát thêm bản ghi probe cho seq % 100 == 0")
@@ -471,7 +528,8 @@ def main():
             raise SystemExit("Cần --output khi dùng --test-parquet-spark.")
         run_test_parquet_spark(cfg, args.test_parquet_spark, args.output,
                                master=args.master, packages=args.packages,
-                               force_no_rocksdb=args.no_rocksdb)
+                               force_no_rocksdb=args.no_rocksdb,
+                               max_files_per_trigger=args.max_files_per_trigger)
         return
 
     # ---- chế độ kiểm thử offline

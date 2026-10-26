@@ -3,9 +3,10 @@
 Người viết: B (Mẫn). Người nhận: A (Mai).
 Repo: https://github.com/thanhmai2403/p3-streaming — nhánh `b/data`, PR **#1** (`b/data` → `main`).
 
-**Tóm tắt (cập nhật 25/10/2026, sau khi chạy thử trên máy B):**
+**Tóm tắt (cập nhật 25/10/2026, sau khi chạy thật trên máy B — commit `493e6da`):**
 - Đã xong **Ưu tiên 0, Ưu tiên 1** (handover_A mục 4) và thêm SOTA **Half-Space Trees**. PR **#1** (`b/data` → `main`).
-- **Tương đương qua file đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu (`max_diff = 0.00e+00`), so theo tập (`seq`, `detector`) đúng README mục 9. **Tương đương qua Kafka thật: ĐÃ QUA CỔNG** — `rq0_spark_equiv_r1` chạy trên Docker thật (Kafka + Spark standalone 2 worker, `docker-compose.lowmem.yml`) ra **759/759**, `max_diff = 0.00e+00`, `probe = 100`, `bad = 0`, `dup_seq = 0`, `missing_seq = 0`; bằng chứng: `results/raw/rq0_spark_equiv_r1/{alerts.jsonl,latency.csv,meta.json}` + dòng `rq0_spark_equiv_r1` trong `results/summary/rq0.csv`. Còn lại: chưa so với Flink; chưa kiểm tra nhiều micro-batch và dữ liệu trễ cho Spark.
+- **Tương đương qua file đã qua**: Spark `applyInPandasWithState` khớp **759/759** alert với bản tham chiếu (`max_diff = 0.00e+00`), so theo tập (`seq`, `detector`) đúng README mục 9. **Tương đương qua Kafka thật: ĐÃ QUA CỔNG** — `rq0_spark_equiv_r1` chạy trên Docker thật (Kafka + Spark standalone 2 worker) với **`COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`** (đúng ràng buộc `mem_limit` 1300m của `spark-master`, mục 3.5) ra **PASS `759/759` alert**, `max_diff = 0.00e+00`, `probe = 100`, `bad = 0`, `dup_seq = 0`, `missing_seq = 0`, `clock_ok = true`; bằng chứng: `results/raw/rq0_spark_equiv_r1/{alerts.jsonl,latency.csv,meta.json,summary.json,measure.log,sent.csv,docker_stats.csv}` + dòng `rq0_spark_equiv_r1` trong `results/summary/rq0.csv`. Còn lại: chưa so với Flink.
+- **Nhiều micro-batch + dữ liệu trễ: ĐÃ KIỂM TRA (26/10/2026)** — `python -m tests.test_spark_multibatch_late`: 19 568 sự kiện cắt thành **20 file** (mỗi file 978–979 sự kiện liên tiếp theo `seq`) đọc với `maxFilesPerTrigger=1` → **20 micro-batch** thật (state phải lưu/đọc lại từ RocksDB giữa các batch), phát lại đúng thứ tự của producer với `--late-fraction 0.05 --late-shift 1 4` → **1325 alert + 188 probe**, `late_dropped = 544` **bằng đúng** bản tham chiếu, `only_ref = 0`, `only_spark = 0`, `score_mismatch = 0`, `max_diff = 0.00e+00`. Bằng chứng: `results/raw/rq0_spark_multibatch_late/{ref_alerts.jsonl, spark_alerts.jsonl, check.json}`.
 - **Bảng chất lượng đã chấm lại trên toàn bộ 19 568 mẫu** (bản cũ chấm baseline trên `equiv_10k` nên Recall bị thấp giả). F1: `hst` 0,4476 ≈ `zscore` 0,4306 > `ewma` 0,3398 > `mp` 0,0635. HST và z-score chênh chỉ 0,017 với 90 nhãn, một lần chạy, nên **chưa kết luận hơn kém**.
 - **Máy B không đủ làm máy đo RQ1/RQ3** (mục 3.5): RAM máy 14,176 MB, WSL tối đa 8,7 GB, cấu hình đo cần ~11,2 GB. Đề xuất máy A là máy đo (mục 4.1). Máy B chạy `rq0`, `rq2` với `docker-compose.lowmem.yml`.
 - Docker đã chạy được trên máy B (WSL integration bật qua `settings-store.json`). Chưa có số liệu RQ1/RQ3 của Spark.
@@ -49,6 +50,7 @@ Quy tắc gộp giờ đã được ghi chi tiết vào **README 7.1** (commit n
 | `producer/producer.py` (`--mode replay`) | Phát lại parquet theo `--speed`, `--late-fraction` / `--late-shift a b`, chia trạm theo `--producer-id/--n-producers`, `seq = producer_id·10^12 + đếm`, `ingest_ts_ms` gán **lúc gửi**, ghi `sent.csv`, có `--dry-run` |
 | `scripts/run_experiment.sh` | Đúng **7 bước** của handover_A mục 4 (check_clock → dừng engine kia + tạo topic + xoá checkpoint → submit → measure nền → producer → kill worker ở giây 60 cho rq3 → cancel + summarize + chấm chất lượng + check_clock lần cuối). `run_id = <rq>_<engine>_<config>_r<n>` |
 | `scripts/plot_results.py` | 3 hình cho báo cáo (`rq2_quality_comparison`, `rq1_throughput_latency`, `rq3_fault_recovery`), PNG 300 DPI + PDF, có `--check`/`--demo` |
+| `scripts/aggregate_quality.py` | Gộp các lần lặp `<rq>_<engine>_<cfg>_r*_quality.csv` thành **1 dòng / (engine, detector)** = trung bình các lần, kèm `<cột>_std`, `n_reps`, `runs`; ghi `results/summary/<rq>_<engine>_<cfg>_quality.csv` để `plot_results.py` vẽ trung bình thay vì chỉ lần r1 (nó bỏ trùng theo thứ tự tên file) |
 
 ---
 
@@ -64,6 +66,7 @@ Quy tắc gộp giờ đã được ghi chi tiết vào **README 7.1** (commit n
 | `test_mp` | **PASS** | 3 biến thể Matrix Profile (offline, `--no-normalize`, `--causal`) chạy được trên chuỗi giả |
 | `compare_outputs.py` (offline vs offline) | **TƯƠNG ĐƯƠNG** | `n=759/759, only=0/0, score_mismatch=0, max_diff=0.00e+00` |
 | `spark_job/job.py --test-parquet-spark` → `compare_outputs.py` | **TƯƠNG ĐƯƠNG** | ref 759 = spark 759 (zscore 348, ewma 411), `max_diff=0.00e+00`, `late_dropped=0` |
+| `test_spark_multibatch_late` | **PASS** | 20 file (`maxFilesPerTrigger=1`) → **20 micro-batch**, 1325 alert + 188 probe, `late_dropped = 544` = tham chiếu, `only=0/0`, `score_mismatch=0`, `max_diff=0.00e+00` (cần Java 17 của image `p3-spark`, xem mục 3.8) |
 | Smoke streaming local (2 pha, checkpoint recovery) | **PASS** | pha 1: 244 bản ghi (162 alert + 82 probe); pha 2 restart từ checkpoint: +129 bản ghi |
 
 ### 2.2 Bảng chấm SOTA / baseline — `results/summary/rq2_offline_quality.csv`
@@ -81,8 +84,32 @@ Cùng một bộ chấm (`measure/measure_quality.py`, cửa sổ `[start_ms, en
 - **HST** báo ít nhưng đúng (P cao nhất), bỏ sót nhiều (R thấp). **z-score** cân bằng. **EWMA** bắt đủ 90/90 nhưng báo thừa nhiều nhất.
 - F1 của HST và z-score chỉ chênh 0,017; với 90 nhãn và một lần chạy xác định, nên nói **tương đương F1, khác hồ sơ đánh đổi**, không nói HST tốt hơn.
 - Precision đếm theo **alert**, không theo sự kiện: bất thường dài (drift 24-48 mẫu) có thể sinh nhiều alert liên tiếp nên P của detector "bật liên tục" bị thổi lên. MP có bỏ 24 mẫu sau mỗi alert (`sota.mp.refractory`) nên điều kiện không hoàn toàn giống nhau.
-- Cả 4 dòng đều `has_recv_ts_ms = False` nên cột `detection_delay_*` để trống (SOTA offline). Dòng streaming sẽ có số khi chạy `rq2` qua Kafka.
+- Cả 4 dòng đều `has_recv_ts_ms = False` nên cột `detection_delay_*` để trống (SOTA offline). Dòng **streaming** (có `recv_ts_ms`) nằm ở **mục 2.2b** dưới đây.
 - Lưu ý khi chấm: **không** chấm baseline trên `equiv_10k.parquet` (chỉ 10 000 mẫu đầu) với đủ 90 nhãn — nhãn nằm ngoài phần đó bị tính là bỏ sót. `equiv_10k` chỉ dùng để so Flink với Spark.
+
+### 2.2b RQ2 qua Kafka trên Spark — 3 lần lặp (`rq2_spark_replay_r1/r2/r3`)
+
+Chạy `bash scripts/run_experiment.sh rq2 spark replay <n>` trên máy B với `docker-compose.lowmem.yml`
+(`SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`), `REPLAY_SPEED=2000` = **2 000 sự kiện/giây**
+⇒ 19 568 sự kiện vào Kafka trong **~11 s**, 5 % sự kiện bị làm trễ 1–4 vị trí (README 6.3), 6 partition,
+không kill worker. Cùng bộ chấm với mục 2.2 (cửa sổ `[start_ms, end_ms + 1 h]`, `labels.csv` 90 nhãn).
+
+| engine | detector | alert | alert trong cửa sổ | phát hiện | Precision | Recall | F1 | delay trung vị (ms) | delay p95 (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `spark` | `zscore` | 572 | 161 | 77/90 | 0,2815 | 0,8556 | **0,4236** | 28 652 | 32 597 |
+| `spark` | `ewma` | 753 | 153 | 90/90 | 0,2032 | **1,0000** | 0,3377 | 28 940 | 32 595 |
+
+Số trong bảng là **trung bình 3 lần lặp** (`scripts/aggregate_quality.py` → `results/summary/rq2_spark_replay_quality.csv`;
+từng lần ở `results/summary/rq2_spark_replay_r<n>_quality.csv`).
+
+Đọc bảng:
+- **Chất lượng lặp lại tuyệt đối**: cả 3 lần cho **cùng** P/R/F1 (chỉ độ trễ đổi: trung vị p50 của run = 27 740 / 25 584 / 30 987 ms). Luồng sự kiện và quy tắc trễ là **xác định**, nên 3 lần lặp ở RQ2 dùng để lấy **phân bố độ trễ**, không phải để lấy trung bình chất lượng.
+- So với bản offline cùng bộ chấm (mục 2.2): z-score F1 0,4306 → **0,4236** (−0,0070, 77 thay vì 79 alert đúng), EWMA 0,3398 → **0,3377**. Chênh lệch **có nguyên nhân xác định**: 544 sự kiện bị bỏ vì trễ (quy tắc README 6.3, không chờ) làm chuỗi trạng thái (z-score cửa sổ 24, EWMA) lệch đi ở đúng những chỗ đó ⇒ mất 2 alert z-score. Đây là **hệ quả của quy tắc trễ**, không phải sai số đo.
+- `dup_seq = 0` cả 3 lần (không nhân bản ở `AT_LEAST_ONCE` với tải này); `missing_seq = 8/196` (**4,1 %** probe). Probe nào **rơi đúng vào sự kiện bị bỏ trễ** thì không bao giờ tới sink — cùng bản chất `late_dropped`, không phải mất dữ liệu ngoài dự kiến. Đây cũng là lý do **không** dùng `missing_seq` của RQ2 làm chỉ số tính đúng đắn (chỉ dùng cho RQ0/RQ3).
+- `clock_ok = true` cả 3 lần, kiểm tra đồng hồ trước **và** sau khi đo ⇒ số độ trễ dùng được.
+- **Cảnh báo khi đọc `results/summary/rq2.csv`**: `sent_rate_ev_s` trống và `sustainable = false` **không** có nghĩa "Spark không bền vững". Producer gửi xong ở giây ~13, còn cửa sổ đo bắt đầu sau warm-up 30 s ⇒ **30 s cuối không còn sự kiện** (`median_last30_ms = NaN` ⇒ `drift_ok = False` ⇒ `sustainable = False`). Thông lượng và tính bền vững **chỉ lấy từ RQ1**; ở RQ2 chỉ dùng `lat_*`, `dup_seq`, chất lượng.
+- Độ trễ 25–31 s (trung vị mỗi run) là **thời gian xả hàng đợi**, không phải độ trễ trạng thái ổn định: 19 568 sự kiện dồn vào Kafka trong ~11 s ⇒ ~640–750 sự kiện/giây thực tế, vượt năng lực 2 worker × 2 core ở cấu hình lowmem. Muốn đo độ trễ ổn định cho RQ2 thì **giảm `REPLAY_SPEED`** để replay trải hết cửa sổ 180 s (A quyết; 3 lần hiện tại dùng cùng 2 000 nên so sánh được với nhau).
+- Bằng chứng: `results/raw/rq2_spark_replay_r{1,2,3}/` (`alerts.jsonl`, `latency.csv`, `summary.json`, `meta.json`, `sent.csv`, `docker_stats.csv`, `timeseries_1s.csv`), `results/summary/rq2.csv` (3 dòng), `results/summary/rq2_spark_replay_r{1,2,3}_quality.csv`, `results/summary/rq2_spark_replay_quality.csv`, hình `results/plots/rq2_quality_comparison.{png,pdf}` — nay **6 nhóm cột**: `hst`, `mp`, `zscore`, `ewma` (offline) + `spark/zscore`, `spark/ewma`.
 
 ### 2.3 Vì sao Matrix Profile của A ra F1 = 0,0635 (A quyết)
 
@@ -142,7 +169,7 @@ Thêm: file source streaming **không tự suy schema** (`Schema must be specifi
 
 Cấu hình đo trong `docker-compose.yml` (Kafka 3 GB + engine 1,2 + 2×3,5 GB) cần **~11,2 GB** cho RAM container. WSL máy B đã chốt `memory=9GB` (không nâng lên 10-11 GB, vì khi đó Windows, Docker Desktop và VS Code chỉ còn ~3 GB; RAM bị ép làm container bị kill hoặc làm méo độ trễ). Vì vậy **máy B không làm máy đo RQ1/RQ3**.
 
-Máy B dùng `docker-compose.lowmem.yml` (Kafka 1,5 GB, mỗi engine ~5,4 GB, tổng ~6,9 GB) **chỉ cho `rq0` (tương đương) và `rq2` (chất lượng)**. Số liệu chạy với override này **không dùng để so sánh hiệu năng** (RQ1/RQ3). Khi chạy Spark với override phải đặt `SPARK_EXECUTOR_MEMORY=1024m SPARK_DRIVER_MEMORY=512m` (driver 512m trong `mem_limit` 1300m của `spark-master`) và `COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`.
+Máy B dùng `docker-compose.lowmem.yml` (Kafka 1,5 GB, mỗi engine ~5,4 GB, tổng ~6,9 GB) **chỉ cho `rq0` (tương đương) và `rq2` (chất lượng)**. Số liệu chạy với override này **không dùng để so sánh hiệu năng** (RQ1/RQ3). Khi chạy Spark với override phải đặt `SPARK_EXECUTOR_MEMORY=1024m SPARK_DRIVER_MEMORY=512m` (driver 512m trong `mem_limit` 1300m của `spark-master`, `SPARK_DAEMON_MEMORY=256m`) và `COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml` (trên Git Bash của Windows dùng dấu `;`: `"docker-compose.yml;docker-compose.lowmem.yml"`). Cấu hình này **đã kiểm chứng bằng hai lần chạy thật**: `rq0_spark_equiv_r1` (PASS 759/759) và `tests/test_spark_multibatch_late` (PASS, mục 2.1).
 
 ### 3.6 Ba bẫy bash khi viết `run_experiment.sh`
 
@@ -165,6 +192,12 @@ Bản hiện tại dùng `ingest_ts_ms` **chép sẵn trong chính alert** (mẫ
 | `check_clock.sh` báo lệch ~100 ms dù đồng hồ đúng | Sai số đo (`docker compose exec` chậm) lớn hơn độ lệch; đã sửa tiêu chí: FAIL chỉ khi `|lệch| − sai số > ngưỡng`, lấy 5 mẫu tốt nhất |
 | `pip install` `pandas==2.2.3` biên dịch lỗi | Python hệ thống của Ubuntu là 3.14, chưa có bản cài sẵn: tạo venv Python 3.11 bằng `uv venv --python 3.11` |
 | `docker` không có trong Ubuntu | Bật WSL integration trong Docker Desktop (hoặc `EnableIntegrationWithDefaultWslDistro` + `IntegratedWslDistros` trong `settings-store.json`) rồi `wsl --shutdown` |
+| Chạy `pyspark` trên **host Windows** (venv) báo `java.lang.UnsupportedOperationException: getSubject is not supported` khi đọc parquet | JDK của máy B là **Java 25**; Spark 4.1.3 (Hadoop 3.4.x) vẫn gọi `Subject.getSubject` — API đã bị **bỏ từ Java 24**. Không sửa được bằng cấu hình: chạy Spark **trong image `p3-spark:4.1.3` (Java 17)**, lệnh ở mục 5 (bước 1b). Các test *không cần Spark* (`test_detector`, `test_producer`, `test_measure`, `test_mp`) vẫn chạy trên host bình thường |
+| `bash scripts/create_topics.sh` báo `Python was not found; run without arguments to install from the Microsoft Store…` rồi `run_experiment.sh` dừng ở bước **[2/7]** | Git Bash của Windows **không có `python3` thật**, chỉ có alias Microsoft Store trả mã lỗi; script cũ gọi thẳng `python3`. Đã sửa: chọn Python như `run_experiment.sh` (`.venv/Scripts/python.exe` → `.venv/bin/python` → `python3`) (mục 3.6 dòng 4) |
+| `create_topics.sh` in `Xóa topic sensor` rồi **thoát im lặng** (exit 1), `run_experiment.sh` dừng ở bước **[2/7]** dù topic đã xóa | `set -e` + `[ "$left" = "0" ] && break`: khi topic **chưa** biến mất (Kafka xóa bất đồng bộ) thì cả list trả mã 1 ⇒ script thoát ngay. Đã sửa thành `if … then break; fi` và báo lỗi rõ nếu sau 30 s topic vẫn còn |
+| `create_topics.sh` báo `…/opt/kafka/bin/kafka-topics.sh: No such file or directory` hoặc đường dẫn thành `C:/Program Files/Git/opt/...` | MSYS path conversion của Git Bash: đã `export MSYS_NO_PATHCONV=1` ngay trong script (trước đây chỉ có khi gọi qua `run_experiment.sh`) |
+| `kafka-topics.sh --describe --topic "sensor\|alerts"` báo topic không tồn tại | `kafka-topics.sh` **không** nhận regex ở `--describe` (coi `sensor\|alerts` là tên topic theo nghĩa đen). Đã sửa: gọi `--describe` riêng cho từng topic |
+| Trong container `p3-spark`, `python3 -m tests....` báo `ModuleNotFoundError: No module named 'pyspark'` | Image **không** `pip install pyspark`: pyspark nằm ở `/opt/spark/python` và compose chỉ đặt `PYTHONPATH=/opt/p3`. Phải tự thêm `/opt/spark/python`, `/opt/spark/python/lib/pyspark.zip`, `/opt/spark/python/lib/py4j-0.10.9.9-src.zip` (lệnh mục 5) hoặc chạy qua `/opt/spark/bin/spark-submit` |
 
 ---
 
@@ -228,6 +261,13 @@ python measure/compare_outputs.py --ref-file data/processed/ref_alerts.jsonl \
     --ref offline --a offline --b spark
 # -> "TƯƠNG ĐƯƠNG: n=759/759, max_diff=0.00e+00"
 
+# 1b) nhiều micro-batch + dữ liệu trễ (BẮT BUỘC chạy trong image p3-spark: JDK host là Java 25,
+#     Spark 4.1.3 không chạy được - xem mục 3.8). Bind-mount :rw vì test ghi results/ + checkpoints/.
+docker run --rm -v "$PWD:/opt/p3" -w /opt/p3 \
+  -e PYTHONPATH=/opt/p3:/opt/spark/python:/opt/spark/python/lib/pyspark.zip:/opt/spark/python/lib/py4j-0.10.9.9-src.zip \
+  p3-spark:4.1.3 python3 -m tests.test_spark_multibatch_late
+# -> "20 micro-batch: 1513 bản ghi (1325 alert + 188 probe), late_dropped=544" + "SPARK_MULTIBATCH_LATE_OK"
+
 # 2) một lần chạy thí nghiệm (script lo cả 7 bước)
 bash scripts/run_experiment.sh rq0 spark equiv 1        # tương đương qua Kafka
 bash scripts/run_experiment.sh rq1 spark rate2000 1     # đổi cấu hình theo mức A chốt
@@ -240,6 +280,10 @@ python sota/half_space_trees.py --input data/processed/openaq_hn_injected.parque
 python measure/measure_quality.py --labels data/processed/labels.csv \
     --alerts results/raw/rq2_offline_mp_r1/alerts.jsonl results/sota_hst/alerts.jsonl \
     --out results/summary/rq2_offline_quality.csv
+
+# 3b) gộp 3 lần lặp RQ2 về 1 dòng/(engine, detector) để hình vẽ TRUNG BÌNH 3 lần
+python scripts/aggregate_quality.py --engine spark --cfg replay --reps 3
+python scripts/aggregate_quality.py --engine flink --cfg replay --reps 3
 
 # 4) hình cho báo cáo
 python scripts/plot_results.py                # -> results/plots/*.png, *.pdf
@@ -256,8 +300,8 @@ docker compose exec spark-master ls /checkpoints/spark/<run_id>   # checkpoint R
 
 1. ~~Chạy `rq0 spark equiv 1` qua Kafka thật~~ **ĐÃ XONG (25/10/2026)**: `rq0_spark_equiv_r1` với `docker-compose.lowmem.yml` (`COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml`, `SPARK_EXECUTOR_MEMORY=1024m`, `SPARK_DRIVER_MEMORY=512m`) → `TƯƠNG ĐƯƠNG 759/759`, `max_diff = 0.00e+00`, `probe = 100` (bằng chứng: `results/raw/rq0_spark_equiv_r1/`, `results/summary/rq0.csv`).
 2. Chạy `rq0 flink equiv 1` (hoặc nhờ A) và so **ba bên**: tham chiếu = Flink = Spark.
-3. Kiểm tra Spark với **nhiều micro-batch** (`maxFilesPerTrigger=1`, ~20 file) và với **dữ liệu trễ** (`late_dropped > 0`, bằng với bản tham chiếu).
-4. Chạy `rq2 spark replay 1` và `rq2 flink replay 1` trên máy B (điền `results/summary/rq2.csv`).
+3. ~~Kiểm tra Spark với **nhiều micro-batch** (`maxFilesPerTrigger=1`, ~20 file) và với **dữ liệu trễ** (`late_dropped > 0`, bằng với bản tham chiếu)~~ **ĐÃ XONG (26/10/2026)**: `tests/test_spark_multibatch_late` → 20 micro-batch, `late_dropped = 544` = tham chiếu, 1325 alert + 188 probe khớp tuyệt đối (`only=0/0`, `score_mismatch=0`, `max_diff=0.00e+00`); bằng chứng `results/raw/rq0_spark_multibatch_late/check.json`.
+4. ~~Chạy `rq2 spark replay 1` và `rq2 flink replay 1` trên máy B (điền `results/summary/rq2.csv`)~~ **SPARK ĐÃ XONG (26/10/2026)**: `rq2_spark_replay_r1/r2/r3`, cả 3 `EXIT=0`, `clock_ok=true`; z-score F1 **0,4236**, EWMA F1 **0,3377** (giống nhau tuyệt đối ở 3 lần), delay trung vị 25,6–31,0 s; bằng chứng `results/raw/rq2_spark_replay_r{1,2,3}/`, `results/summary/rq2.csv`, `results/summary/rq2_spark_replay_quality.csv`, hình `results/plots/rq2_quality_comparison.{png,pdf}`; chi tiết + cảnh báo đọc số ở **mục 2.2b**. **Còn lại: `rq2 flink replay <n>`** (cần jar connector Flink Kafka, xem mục 6 dòng cuối).
 5. Trả lời A về máy đo; nếu máy A đo thì B gửi A `scripts/run_experiment.sh` mới nhất và `docker-compose.lowmem.yml` chỉ để tham khảo.
 6. Chạy `scripts/plot_results.py` sau mỗi đợt; viết tiếp `docs/report_B_draft.md`.
 

@@ -1,0 +1,4 @@
+run_id,rq,engine,cfg,rep,n_probe_window,lat_p50_ms,lat_p95_ms,lat_p99_ms,lat_max_ms,throughput_mean_ev_s,throughput_median_ev_s,sent_rate_ev_s,median_first30_ms,median_last30_ms,sustainable,dup_seq,dup_extra,expected_probes,missing_seq,missing_basis,clock_ok,clock_problems,sink_p50_ms
+rq2_spark_replay_r1,rq2,spark,replay,1,188,27739.5,32119.5,32494.37,32588.0,104.44444444444446,0.0,,27739.5,,False,0,0,196,8,sent.csv,True,,1000.5
+rq2_spark_replay_r2,rq2,spark,replay,2,188,25583.5,29963.85,30337.5,30431.0,104.44444444444446,0.0,,25583.5,,False,0,0,196,8,sent.csv,True,,873.5
+rq2_spark_replay_r3,rq2,spark,replay,3,188,30987.0,35444.15,35818.5,35912.0,104.44444444444446,0.0,,30987.0,,False,0,0,196,8,sent.csv,True,,757.0

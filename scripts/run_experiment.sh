@@ -95,7 +95,7 @@ WAIT_RUNNING_S="${WAIT_RUNNING_S:-180}"
 HOST_BROKERS="${HOST_BROKERS:-localhost:29092}" # producer/measure chạy trên host
 IN_BROKERS="${IN_BROKERS:-kafka:9092}"          # job trong mạng docker
 REPLAY_FILE="${REPLAY_FILE:-data/processed/openaq_hn_injected.parquet}"
-REPLAY_SPEED="${REPLAY_SPEED:-}"                 # rỗng: để producer.py tự quyết (rq2 không đặt)
+REPLAY_SPEED="${REPLAY_SPEED:-2000}"             # rq2: producer BẮT BUỘC có --speed (argparse); 2000 ev/s
 EQUIV_SPEED="${EQUIV_SPEED:-2000}"              # rq0: --speed khi phát lại equiv_10k
 KILL_AT_S="${KILL_AT_S:-60}"
 RESTART_AFTER_S="${RESTART_AFTER_S:-10}"
@@ -254,8 +254,10 @@ prod_args_for() {
       PROD_ARGS+=(--mode replay --file data/processed/equiv_10k.parquet --speed "$EQUIV_SPEED")
       ;;
     rq2)
-      PROD_ARGS+=(--mode replay --file "$REPLAY_FILE" --late-fraction 0.05 --late-shift 1 4)
-      if [ -n "$REPLAY_SPEED" ]; then PROD_ARGS+=(--speed "$REPLAY_SPEED"); fi
+      # --speed là BẮT BUỘC với --mode replay (producer.py kiểm tra trong main) -> luôn truyền.
+      # 19 568 sự kiện / 2000 ev/s ~ 10 s; chất lượng phát hiện không phụ thuộc tốc độ phát lại.
+      PROD_ARGS+=(--mode replay --file "$REPLAY_FILE" --speed "$REPLAY_SPEED"
+                  --late-fraction 0.05 --late-shift 1 4)
       ;;
     *)
       PROD_ARGS+=(--mode rate --rate "$PER_RATE" --duration "$DURATION_S")
