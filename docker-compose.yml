@@ -34,6 +34,7 @@ x-flink: &flink
       python.executable: /usr/local/bin/python3
       python.client.executable: /usr/local/bin/python3
       python.execution-mode: thread
+      classloader.parent-first-patterns.additional: pemja.
 
 # Spark dùng chung build + volume cho master và 2 worker (phần của B).
 # Mount ./:/opt/p3:ro để sửa code/config không phải build lại (giống Flink).

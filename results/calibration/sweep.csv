@@ -1,0 +1,16 @@
+engine,rate,rep,run_id,note,sent_ev_s,out_ev_s,p50_ms,p99_ms,trend,drain_s,neg_lat,theo_kip
+flink,1000,1,rq1_flink_sweep1000_r1,HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?),,,,,,,,
+flink,1000,2,rq1_flink_sweep1000_r2,,991.0,1102.0,501.0,4949.0,0.15,0.3,0.0,False
+flink,2000,1,rq1_flink_sweep2000_r1,HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?),,,,,,,,
+flink,2000,2,rq1_flink_sweep2000_r2,,1970.0,1956.0,767.0,4374.0,2.3,0.6,0.0,False
+flink,3000,1,rq1_flink_sweep3000_r1,HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?),,,,,,,,
+flink,3000,2,rq1_flink_sweep3000_r2,,2969.0,2741.0,2179.0,8152.0,3.97,2.9,0.0,False
+flink,4000,1,rq1_flink_sweep4000_r1,HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?),,,,,,,,
+flink,4000,2,rq1_flink_sweep4000_r2,,3947.0,3510.0,8202.0,23953.0,1.12,19.5,0.0,False
+flink,5000,1,rq1_flink_sweep5000_r1,HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?),,,,,,,,
+flink,5000,2,rq1_flink_sweep5000_r2,,4930.0,3905.0,10203.0,38808.0,1.11,30.9,0.0,False
+spark,1000,1,rq1_spark_sweep1000_r1,,989.0,1032.0,4573.0,6675.0,0.86,2.7,0.0,False
+spark,2000,1,rq1_spark_sweep2000_r1,,1984.0,2112.0,3802.0,6059.0,0.82,3.4,0.0,False
+spark,3000,1,rq1_spark_sweep3000_r1,,2966.0,3161.0,4075.0,6083.0,0.77,4.1,0.0,False
+spark,4000,1,rq1_spark_sweep4000_r1,,3956.0,4068.0,3969.0,6420.0,0.67,3.3,0.0,False
+spark,5000,1,rq1_spark_sweep5000_r1,,4894.0,5951.0,3974.0,7345.0,0.65,4.0,0.0,False

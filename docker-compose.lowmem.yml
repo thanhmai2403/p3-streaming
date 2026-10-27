@@ -42,6 +42,7 @@ x-flink-lowmem: &flink-lowmem
     python.executable: /usr/local/bin/python3
     python.client.executable: /usr/local/bin/python3
     python.execution-mode: thread
+    classloader.parent-first-patterns.additional: pemja.
 
 services:
   kafka:

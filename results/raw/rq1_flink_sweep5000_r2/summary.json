@@ -1,0 +1,30 @@
+{
+  "run_id": "rq1_flink_sweep5000_r2",
+  "rq": "rq1",
+  "engine": "flink",
+  "cfg": "sweep5000",
+  "rep": 2,
+  "window_ms": [
+    6168000,
+    6348000
+  ],
+  "n_probe_window": 2025,
+  "lat_p50_ms": 10755.0,
+  "lat_p95_ms": 37861.8,
+  "lat_p99_ms": 38806.44,
+  "lat_max_ms": 40225.0,
+  "throughput_mean_ev_s": 1125.0,
+  "throughput_median_ev_s": 0.0,
+  "sent_rate_ev_s": 4907.4838709677415,
+  "median_first30_ms": 9109.0,
+  "median_last30_ms": NaN,
+  "sustainable": false,
+  "dup_seq": 0,
+  "dup_extra": 0,
+  "expected_probes": 3000,
+  "missing_seq": 0,
+  "missing_basis": "sent.csv",
+  "clock_ok": true,
+  "clock_problems": "",
+  "sink_p50_ms": 249.0
+}

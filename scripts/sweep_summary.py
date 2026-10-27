@@ -30,12 +30,20 @@ PAT = re.compile(r"^rq1_(?P<engine>[a-z]+)_sweep(?P<rate>\d+)_r(?P<rep>\d+)$")
 
 def one(d: Path, skip_s: float) -> dict:
     m = PAT.match(d.name)
-    lat = pd.read_csv(d / "latency.csv")
-    sent = pd.concat([pd.read_csv(f) for f in sorted(d.glob("sent*.csv"))])
+    row = {"engine": m["engine"], "rate": int(m["rate"]), "rep": int(m["rep"]), "run_id": d.name}
+    sent_files = sorted(d.glob("sent*.csv"))
+    lat = pd.read_csv(d / "latency.csv") if (d / "latency.csv").exists() else pd.DataFrame()
+    lat = lat.dropna(subset=[c for c in ("ingest_ts_ms", "recv_ts_ms") if c in lat.columns]) if len(lat) else lat
+    if not sent_files:
+        row["note"] = "HỎNG: không có sent.csv (producer không chạy?)"
+        return row
+    if lat.empty:
+        row["note"] = "HỎNG: không nhận được probe nào (job không chạy / không ghi ra Kafka?)"
+        return row
+    sent = pd.concat([pd.read_csv(f) for f in sent_files])
     per_sec = sent.groupby("ts_ms").sent.sum().sort_index()
     t0, t_end = int(per_sec.index.min()), int(per_sec.index.max()) + 1000
     a = t0 + int(skip_s * 1000)
-    row = {"engine": m["engine"], "rate": int(m["rate"]), "rep": int(m["rep"]), "run_id": d.name}
     if t_end - a < 20_000:
         row["note"] = "chạy quá ngắn"
         return row
@@ -70,12 +78,26 @@ def main():
     if not dirs:
         raise SystemExit("chưa có run rq1_<engine>_sweep<R>_r<n> nào")
     df = pd.DataFrame([one(d, a.skip_s) for d in dirs]).sort_values(["engine", "rate", "rep"])
+    if "note" not in df:
+        df["note"] = ""
+    df["note"] = df["note"].fillna("")
     print(df.drop(columns=["run_id"]).to_string(index=False))
+    good = df[~df.note.str.startswith("HỎNG")]
+    done = set(zip(good.engine, good.rate))
+    broken = df[df.note.str.startswith("HỎNG") & ~df.apply(lambda r: (r.engine, r.rate) in done, axis=1)]
+    if len(broken):
+        print("\nRun hỏng (xem results/raw/<run_id>/ : measure.log, producer_*.log, submit.log):")
+        for rid, note in zip(broken.run_id, broken.note):
+            print(f"  {rid}: {note}")
     CAL.mkdir(parents=True, exist_ok=True)
     df.to_csv(CAL / "sweep.csv", index=False)
     for e, g in df.groupby("engine"):
-        ok = g[g.theo_kip == True]  # noqa: E712
+        ok = g[g.get("theo_kip", pd.Series(False, index=g.index)) == True]  # noqa: E712
         print(f"{e}: mức cao nhất còn theo kịp = {int(ok.rate.max()) if len(ok) else 'không có'} ev/s")
+    if a.archive and len(broken):
+        print("Còn run hỏng chưa chạy lại -> KHÔNG archive. Chạy lại mức đó với số r mới "
+              "(vd ... sweep2000 2) rồi chạy lại script.")
+        return
     if a.archive:
         for d in dirs:
             if d.parent == RAW:

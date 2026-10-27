@@ -33,4 +33,12 @@ COPY docker/jars/flink-sql-connector-kafka-5.0.0-2.2.jar /opt/flink/lib/
 # Thư mục checkpoint thuộc user flink. Named volume sẽ kế thừa quyền này ở lần mount đầu.
 RUN mkdir -p /checkpoints/flink && chown -R flink:flink /checkpoints
 
+# Thread mode (pemja) + Java 17: nếu flink-python nằm trong jar của TỪNG job (mặc định, client tự gửi kèm),
+# job thứ 2 trên cùng TaskManager, hoặc task restart sau lỗi, phải nạp lại thư viện native của pemja
+# trong classloader mới -> pemja dùng reflection `ClassLoader.loadedLibraryNames` (không còn từ Java 17)
+# -> NoSuchFieldException -> job restart vô hạn, không ra bản ghi nào (gặp ở các run sweep 27/10).
+# Sửa: đưa flink-python vào lib (classloader cha, nạp 1 lần/JVM) + `classloader.parent-first-patterns.
+# additional: pemja.` trong FLINK_PROPERTIES. CP chứ không MV: client `flink run -py` vẫn cần jar trong opt/.
+RUN cp /opt/flink/opt/flink-python-*.jar /opt/flink/lib/
+
 USER flink

@@ -1,0 +1,30 @@
+{
+  "run_id": "rq1_spark_sweep2000_r1",
+  "rq": "rq1",
+  "engine": "spark",
+  "cfg": "sweep2000",
+  "rep": 1,
+  "window_ms": [
+    2692000,
+    2872000
+  ],
+  "n_probe_window": 700,
+  "lat_p50_ms": 3708.0,
+  "lat_p95_ms": 5267.349999999999,
+  "lat_p99_ms": 5749.699999999999,
+  "lat_max_ms": 6169.0,
+  "throughput_mean_ev_s": 388.88888888888886,
+  "throughput_median_ev_s": 0.0,
+  "sent_rate_ev_s": 1978.6129032258063,
+  "median_first30_ms": 3621.5,
+  "median_last30_ms": NaN,
+  "sustainable": false,
+  "dup_seq": 0,
+  "dup_extra": 0,
+  "expected_probes": 1200,
+  "missing_seq": 0,
+  "missing_basis": "sent.csv",
+  "clock_ok": true,
+  "clock_problems": "",
+  "sink_p50_ms": 584.0
+}
