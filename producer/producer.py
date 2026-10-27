@@ -1,7 +1,7 @@
 """Producer đẩy sự kiện vào topic `sensor` (README mục 8).
 
   --mode rate   (A): 1000 trạm tổng hợp syn_0000..syn_0999, random walk x_t = x_{t-1} + N(0,1), bắt đầu 50,
-                     tốc độ cố định --rate sự kiện/giây trong --duration giây. event_time_ms = giờ máy lúc gửi.
+                     tốc độ cố định --rate sự kiện/giây trong --duration giây. event_time_ms = giờ thật lúc gửi.
   --mode replay (B): phát lại file parquet OpenAQ theo thứ tự thời gian, --speed sự kiện/giây,
                      có thể giữ lại --late-fraction sự kiện rồi gửi sau a–b sự kiện kế tiếp CÙNG trạm.
                      Chia trạm theo chỉ_số_trạm % n_producers (bản chuẩn của B) và
@@ -10,6 +10,7 @@
 Quy ước chung:
   - key Kafka = station_id  -> mọi sự kiện của 1 trạm vào cùng partition, giữ thứ tự gửi.
   - seq = producer_id * 10^12 + bộ đếm, gán LÚC GỬI (sự kiện bị giữ lại sẽ có seq lớn hơn).
+  - ingest_ts_ms = CLOCK_MONOTONIC (common.schema.now_ms), KHÔNG phải epoch; sent.csv cũng theo đồng hồ này.
   - Nhiều producer song song: mỗi producer 1 --producer-id, chỉ gửi trạm có
     (chỉ_số_trạm % --n-producers == --producer-id). --rate là tốc độ CỦA MỖI tiến trình.
   - sent.csv (nếu có --out-dir): ts_ms, producer_id, sent  (số sự kiện đã gửi trong từng giây).
@@ -33,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import config  # noqa: E402
-from common.schema import SEQ_BASE, now_ms  # noqa: E402
+from common.schema import SEQ_BASE, now_ms, wall_ms  # noqa: E402
 
 
 # ---------------------------------------------------------------- gửi + đếm
@@ -78,7 +79,7 @@ class Sender:
         t = now_ms()
         seq = self.pid * SEQ_BASE + self.counter
         self.counter += 1
-        et = t if event_time_ms is None else int(event_time_ms)
+        et = wall_ms() if event_time_ms is None else int(event_time_ms)   # event-time = giờ thật
         # f-string nhanh hơn json.dumps ~3 lần; repr(float) cho đúng định dạng số của JSON
         msg = (f'{{"v":1,"station_id":"{station_id}","param":"{param}","value":{float(value)!r},'
                f'"event_time_ms":{et},"ingest_ts_ms":{t},"seq":{seq}}}')

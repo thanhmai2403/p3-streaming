@@ -123,7 +123,7 @@ Toàn bộ tham số nằm trong **`config.yaml`**. Code không được hard-co
 | `param` | string | `pm25` |
 | `value` | float | µg/m³. **Không có giá trị null**: dữ liệu thiếu đã bị bỏ từ bước làm sạch |
 | `event_time_ms` | int | Thời điểm đo, epoch ms UTC |
-| `ingest_ts_ms` | int | Giờ máy (wall clock) lúc producer gửi, epoch ms. Dùng để đo độ trễ |
+| `ingest_ts_ms` | int | Mốc lúc producer gửi theo **CLOCK_MONOTONIC** (ms, `common.schema.now_ms`), **không phải epoch**. Chỉ dùng để trừ nhau khi đo độ trễ (xem ghi chú đồng hồ ở mục 10.2) |
 | `seq` | int | Duy nhất toàn cục: `producer_id * 10^12 + bộ đếm`. Mỗi producer có `producer_id` riêng (0, 1, 2…). **Gán lúc GỬI**, nên sự kiện bị giữ lại để gửi trễ sẽ nhận `seq` lớn hơn. Spark sắp xếp theo `seq`, vì vậy cách gán này đảm bảo Spark xử lý đúng thứ tự đến như Flink |
 
 > **Thay đổi so với kế hoạch:** trường `event_time` (chuỗi ISO) đổi thành `event_time_ms` (số nguyên). Hai engine so sánh số nguyên thì không lệch nhau do cách parse múi giờ.
@@ -148,9 +148,9 @@ Có hai loại bản ghi, phân biệt bằng trường `kind`:
 | `engine` | `flink`, `spark` hoặc `offline` (dùng cho SOTA và bản tham chiếu) |
 | `detector` | `zscore`, `ewma`, `mp`, `hst`. Probe để `null` |
 | `score` | z-score: giá trị z. EWMA: `(x - m) / sqrt(v)`. SOTA: điểm số của mô hình |
-| `emit_ts_ms` | Giờ máy lúc engine tạo bản ghi |
+| `emit_ts_ms` | Mốc lúc engine tạo bản ghi, **CLOCK_MONOTONIC** (ms) như `ingest_ts_ms` |
 | các trường còn lại | Chép nguyên từ sự kiện vào |
-| `recv_ts_ms` | **Không do engine phát.** `measure_perf.py` gắn giờ máy lúc consumer nhận bản ghi, rồi ghi vào `latency.csv` (probe) và `alerts.jsonl` (alert). Dùng cho độ trễ end-to-end và detection delay (mục 10.2) |
+| `recv_ts_ms` | **Không do engine phát.** `measure_perf.py` gắn mốc **CLOCK_MONOTONIC** (ms) lúc consumer nhận bản ghi, rồi ghi vào `latency.csv` (probe) và `alerts.jsonl` (alert). Dùng cho độ trễ end-to-end và detection delay (mục 10.2) |
 
 Quy tắc phát bản ghi:
 
@@ -278,7 +278,7 @@ Dữ liệu gốc có thể đã có sẵn bất thường thật nhưng không 
 ### 7.3 Dữ liệu tổng hợp cho RQ1 và RQ3 (A)
 
 - Có 1000 trạm `syn_0000`…`syn_0999`, mỗi trạm là một random walk: `x_t = x_{t-1} + N(0, 1)`, giá trị đầu 50.
-- `event_time_ms` lấy theo giờ máy lúc gửi. Dữ liệu này không có nhãn và chỉ dùng để tạo tải.
+- `event_time_ms` lấy theo **giờ thật** (epoch) lúc gửi. Dữ liệu này không có nhãn và chỉ dùng để tạo tải.
 
 ---
 
@@ -326,9 +326,11 @@ python measure/compare_outputs.py --ref offline --a flink --b spark --input data
 
 ### 10.2 Định nghĩa metric
 
+> **Đồng hồ (đổi ngày 27/10/2026).** Mọi mốc dùng để đo độ trễ (`ingest_ts_ms`, `emit_ts_ms`, `recv_ts_ms`, `kill_ts_ms`) lấy từ **CLOCK_MONOTONIC** (`common.schema.now_ms`), không dùng giờ thật. Lý do: trên WSL2 + Docker Desktop, giờ thật bị chỉnh nhảy ngay giữa lúc chạy (đo được +66 s, +31 s, −34 s), làm hỏng số đo. Producer, measure, Flink và Spark cùng chạy trên **một kernel** (`scripts/check_clock.sh` kiểm tra bằng `boot_id`), nên dùng chung một đồng hồ monotonic, loại không bao giờ nhảy. Hệ quả: các trường trên **không phải epoch**, chỉ dùng để trừ nhau. `run_experiment.sh`, producer và measure **phải chạy trong WSL**, không chạy từ Git Bash của Windows. `event_time_ms` vẫn là giờ thật.
+
 | Metric | Định nghĩa |
 | --- | --- |
-| Độ trễ end-to-end | `recv_ts_ms − ingest_ts_ms` của các bản ghi `probe`. `recv_ts_ms` là giờ máy lúc consumer đo nhận được. Báo p50, p95, p99 |
+| Độ trễ end-to-end | `recv_ts_ms − ingest_ts_ms` của các bản ghi `probe`. `recv_ts_ms` là mốc lúc consumer đo nhận được. Báo p50, p95, p99 |
 | Thông lượng | Số `probe` nhận được mỗi giây × 100, tính theo `recv_ts_ms`. Cách này đo giống nhau cho cả hai engine, không phụ thuộc consumer lag |
 | Thông lượng bền vững | Mức tải cao nhất thỏa cả hai điều kiện: p99 < 1000 ms, **và** trung vị độ trễ của 30 giây đo cuối ≤ 1,5 lần trung vị của 30 giây đo đầu. Độ trễ tăng dần nghĩa là engine đang bị dồn việc |
 | Thời gian phục hồi (RQ3) | Kill TaskManager/worker ở giây 60. Tính từ lúc kill đến khi p99 của cửa sổ 5 giây về lại dưới 2 lần p99 trước khi kill |

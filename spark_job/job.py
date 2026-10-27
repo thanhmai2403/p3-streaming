@@ -183,7 +183,7 @@ def make_state_func(late_acc=None):
             ]
             records, late = process_rows(
                 rows, st, with_probes=True,
-                emit_ms_func=lambda: time.time_ns() // 1_000_000)
+                emit_ms_func=lambda: time.monotonic_ns() // 1_000_000)   # CLOCK_MONOTONIC, giống common.schema.now_ms
             out_rows.extend(records)
             dropped += late
         if dropped:

@@ -39,7 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from common import config  # noqa: E402
-from common.schema import SEQ_BASE, dumps, now_ms  # noqa: E402
+from common.schema import SEQ_BASE, dumps, now_ms, wall_ms  # noqa: E402
 
 RUN_RE = re.compile(r"^(?P<rq>rq\d+)_(?P<engine>[a-z]+)_(?P<cfg>.+)_r(?P<rep>\d+)$")
 
@@ -163,7 +163,8 @@ def collect(args, cfg: dict):
         raise SystemExit(f"{out} đã có dữ liệu. README: không ghi đè, chạy lại với số r mới "
                          f"(hoặc --force nếu chắc chắn).")
     write_meta(out, {"run_id": args.run_id, **info, "git": git_info(), "config": cfg,
-                     "measure_args": vars(args), "measure_start_ms": now_ms()})
+                     "measure_args": vars(args), "measure_start_ms": now_ms(),
+                     "measure_start_wall_ms": wall_ms(), "clock": "monotonic"})
 
     c = Consumer({
         "bootstrap.servers": args.bootstrap,
@@ -209,7 +210,7 @@ def collect(args, cfg: dict):
         if stats:
             stats.stop_ev.set()
             stats.join(timeout=5)
-        write_meta(out, {"measure_end_ms": now_ms(), "n_probe": rec.n_probe,
+        write_meta(out, {"measure_end_ms": now_ms(), "measure_end_wall_ms": wall_ms(), "n_probe": rec.n_probe,
                          "n_alert": rec.n_alert, "n_bad": rec.n_bad})
     print(f"[measure] probe={rec.n_probe} alert={rec.n_alert} hỏng={rec.n_bad}", file=sys.stderr)
     if not args.no_summary:

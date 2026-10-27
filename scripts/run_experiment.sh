@@ -273,7 +273,8 @@ if [ "$RQ" = "rq3" ]; then
   (
     sleep "$KILL_AT_S"
     # `tr -d '\r'` cùng lý do PER_RATE: '\r' trong meta.json sẽ làm summarize đọc kill_ts_ms lỗi.
-    KILL_MS=$("$PY" -c 'import time; print(time.time_ns() // 1_000_000)' | tr -d '\r')
+    # CLOCK_MONOTONIC giống ingest/emit/recv (common.schema.now_ms), KHÔNG dùng giờ thật
+    KILL_MS=$("$PY" -c 'import time; print(time.monotonic_ns() // 1_000_000)' | tr -d '\r')
     docker kill "$KILL_CT" >/dev/null 2>&1 || true
     KILL_MS="$KILL_MS" KILL_CT="$KILL_CT" RESTART_AFTER_S="$RESTART_AFTER_S" \
       "$PY" - "$OUT" <<'PY'

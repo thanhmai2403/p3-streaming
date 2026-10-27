@@ -28,6 +28,17 @@ DETECTORS = {"zscore", "ewma", "mp", "hst"}
 
 
 def now_ms() -> int:
+    """Mốc đo độ trễ (ingest_ts_ms, emit_ts_ms, recv_ts_ms, kill_ts_ms): CLOCK_MONOTONIC, ms.
+
+    KHÔNG phải giờ thật (epoch). Trên WSL2 + Docker Desktop, mọi tiến trình (kể cả trong container)
+    chạy chung một kernel nên dùng chung đồng hồ này; nó không bao giờ bị chỉnh nhảy như giờ thật
+    (đã đo được giờ thật nhảy +66 s, +31 s, -34 s giữa lúc chạy). Chỉ dùng để TRỪ nhau.
+    """
+    return time.monotonic_ns() // 1_000_000
+
+
+def wall_ms() -> int:
+    """Giờ thật (epoch ms, UTC). Dùng cho event_time_ms của dữ liệu tổng hợp và thông tin trong meta."""
     return time.time_ns() // 1_000_000
 
 

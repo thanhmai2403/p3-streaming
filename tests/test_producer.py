@@ -20,7 +20,10 @@ for pid in range(3):
     assert all(k == e["station_id"] for (k, _), e in zip(cap, evs))
     assert all(int(e["station_id"][4:]) % 3 == pid for e in evs)
     assert [e["seq"] for e in evs] == [pid * 10**12 + i for i in range(len(evs))]
-    assert all(e["event_time_ms"] == e["ingest_ts_ms"] for e in evs)
+    # event_time = giờ thật (epoch), ingest = CLOCK_MONOTONIC (khác hệ quy chiếu, không so trực tiếp)
+    import time as _t
+    assert all(abs(e["event_time_ms"] - _t.time() * 1000) < 120_000 for e in evs)
+    assert all(abs(e["ingest_ts_ms"] - _t.monotonic() * 1000) < 120_000 for e in evs)
     allst |= {e["station_id"] for e in evs}
     print(f"rate pid={pid}: sent={n} (mục tiêu ~3000), trạm={len({e['station_id'] for e in evs})}")
     assert 2700 <= n <= 3300
