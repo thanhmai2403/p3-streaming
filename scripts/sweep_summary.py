@@ -8,7 +8,8 @@ Các run dò ngưỡng tên rq1_<engine>_sweep<R>_r<n> (DURATION_S ngắn, vd 60
   - p50/p99   : độ trễ probe có ingest trong khoảng đó
   - trend     : trung vị độ trễ 10 s cuối / 10 s đầu của khoảng đó (> 1,5 = đang dồn việc)
   - drain_s   : từ lúc gửi xong tới khi nhận probe cuối cùng
-  - theo_kip  : p99 < 1000 ms VÀ trend <= 1,5  (cùng tiêu chí "bền vững" của README 10.2)
+  - tp_ok     : thông lượng theo kịp (trend <= 1,5 VÀ xử lý >= 95% tốc độ gửi)
+  - lat_ok    : tp_ok VÀ p99 < 1000 ms (tiêu chí "bền vững" của README 10.2)
 Mọi mốc là CLOCK_MONOTONIC nên trừ nhau được trực tiếp.
 
   python scripts/sweep_summary.py                  # in bảng, ghi results/calibration/sweep.csv
@@ -62,8 +63,13 @@ def one(d: Path, skip_s: float) -> dict:
         "trend": round(trend, 2),
         "drain_s": round((int(lat.recv_ts_ms.max()) - t_end) / 1000, 1),
         "neg_lat": int((lat.lat < 0).sum()),
-        "theo_kip": bool(p99 < 1000 and trend <= 1.5),
+        # 2 tiêu chí, báo cả hai:
+        #  tp_ok  : THÔNG LƯỢNG theo kịp = không dồn việc (trend <= 1,5) và xử lý >= 95% tốc độ gửi
+        #  lat_ok : tiêu chí "bền vững" của README 10.2 = tp_ok VÀ p99 < 1000 ms
+        "tp_ok": bool(trend <= 1.5 and len(r) * 100 / ((t_end - a) / 1000) >= 0.95 * float(
+            per_sec[(per_sec.index >= a) & (per_sec.index < t_end)].mean())),
     })
+    row["lat_ok"] = bool(row["tp_ok"] and p99 < 1000)
     return row
 
 
@@ -92,8 +98,10 @@ def main():
     CAL.mkdir(parents=True, exist_ok=True)
     df.to_csv(CAL / "sweep.csv", index=False)
     for e, g in df.groupby("engine"):
-        ok = g[g.get("theo_kip", pd.Series(False, index=g.index)) == True]  # noqa: E712
-        print(f"{e}: mức cao nhất còn theo kịp = {int(ok.rate.max()) if len(ok) else 'không có'} ev/s")
+        tp = g[g.get("tp_ok", pd.Series(False, index=g.index)) == True]  # noqa: E712
+        lt = g[g.get("lat_ok", pd.Series(False, index=g.index)) == True]  # noqa: E712
+        print(f"{e}: thông lượng theo kịp tới {int(tp.rate.max()) if len(tp) else 'không mức nào'} ev/s; "
+              f"đạt cả p99 < 1 s tới {int(lt.rate.max()) if len(lt) else 'không mức nào'} ev/s")
     if a.archive and len(broken):
         print("Còn run hỏng chưa chạy lại -> KHÔNG archive. Chạy lại mức đó với số r mới "
               "(vd ... sweep2000 2) rồi chạy lại script.")
