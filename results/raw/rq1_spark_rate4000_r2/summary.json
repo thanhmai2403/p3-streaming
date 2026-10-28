@@ -1,0 +1,30 @@
+{
+  "run_id": "rq1_spark_rate4000_r2",
+  "rq": "rq1",
+  "engine": "spark",
+  "cfg": "rate4000",
+  "rep": 2,
+  "window_ms": [
+    14248000,
+    14428000
+  ],
+  "n_probe_window": 7620,
+  "lat_p50_ms": 7654.0,
+  "lat_p95_ms": 19480.049999999985,
+  "lat_p99_ms": 27074.249999999985,
+  "lat_max_ms": 29250.0,
+  "throughput_mean_ev_s": 4233.333333333334,
+  "throughput_median_ev_s": 0.0,
+  "sent_rate_ev_s": 3999.9944444444445,
+  "median_first30_ms": 13126.5,
+  "median_last30_ms": 6438.0,
+  "sustainable": false,
+  "dup_seq": 0,
+  "dup_extra": 0,
+  "expected_probes": 8400,
+  "missing_seq": 0,
+  "missing_basis": "sent.csv",
+  "clock_ok": true,
+  "clock_problems": "",
+  "sink_p50_ms": 1393.0
+}

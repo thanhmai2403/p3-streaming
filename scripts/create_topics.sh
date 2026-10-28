@@ -26,10 +26,35 @@ T_IN="${T_IN%$'\r'}"; T_OUT="${T_OUT%$'\r'}"; PARTS="${PARTS%$'\r'}"; RF="${RF%$
 
 kt() { docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 "$@"; }
 
+# Đợi broker trả lời (tối đa ~3 phút). Sau một run quá tải (vd Flink 8000/s), broker có thể bận xóa
+# hàng triệu bản ghi của topic cũ và lệnh admin báo "Timed out waiting for a node assignment"
+# -> trước đây create_topics.sh chết ngay và cả run bị bỏ (3/24 run RQ1 ngày 27/10).
+wait_kafka() {
+  local i
+  for i in $(seq 1 12); do
+    if kt --list >/dev/null 2>&1; then return 0; fi
+    echo "Kafka chưa trả lời (lần $i/12), đợi 15 s..." >&2
+    sleep 15
+  done
+  echo "LỖI: Kafka không trả lời sau ~3 phút (xem: docker compose logs --tail 50 kafka)" >&2
+  return 1
+}
+# Chạy lại một lệnh admin tối đa 5 lần (lỗi timeout tạm thời của broker).
+retry() {
+  local i
+  for i in 1 2 3 4 5; do
+    if "$@"; then return 0; fi
+    echo "Lệnh Kafka lỗi (lần $i/5): $*  -> đợi 10 s rồi thử lại" >&2
+    sleep 10
+  done
+  return 1
+}
+
+wait_kafka
 for t in "$T_IN" "$T_OUT"; do
   if kt --list | grep -qx "$t"; then
     echo "Xóa topic $t"
-    kt --delete --topic "$t"
+    retry kt --delete --if-exists --topic "$t"
   fi
 done
 
@@ -37,18 +62,18 @@ done
 # Lưu ý: KHÔNG viết `[ "$left" = 0 ] && break` — dưới `set -e`, khi điều kiện sai thì cả list trả mã
 # 1 và script THOÁT NGAY (đúng lúc topic chưa kịp biến mất), nên phải dùng if/then/fi.
 left=""
-for _ in $(seq 1 30); do
-  left=$(kt --list | grep -cxE "${T_IN}|${T_OUT}" || true)
+for _ in $(seq 1 60); do
+  left=$( (kt --list 2>/dev/null || echo "__kafka_loi__") | grep -cxE "${T_IN}|${T_OUT}|__kafka_loi__" || true)
   if [ "$left" = "0" ]; then break; fi
   sleep 1
 done
 if [ "${left:-0}" != "0" ]; then
-  echo "LỖI: topic ${T_IN}/${T_OUT} vẫn còn sau 30 s chờ xóa" >&2
+  echo "LỖI: topic ${T_IN}/${T_OUT} vẫn còn sau 60 s chờ xóa" >&2
   exit 1
 fi
 
 for t in "$T_IN" "$T_OUT"; do
-  kt --create --topic "$t" --partitions "$PARTS" --replication-factor "$RF"
+  retry kt --create --if-not-exists --topic "$t" --partitions "$PARTS" --replication-factor "$RF"
 done
 
 # Mô tả lại từng topic để xác nhận đã tạo (kafka-topics KHÔNG nhận regex: --topic "a|b" bị coi là

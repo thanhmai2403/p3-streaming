@@ -1,0 +1,30 @@
+{
+  "run_id": "rq1_flink_rate4000_r2",
+  "rq": "rq1",
+  "engine": "flink",
+  "cfg": "rate4000",
+  "rep": 2,
+  "window_ms": [
+    13843000,
+    14023000
+  ],
+  "n_probe_window": 6416,
+  "lat_p50_ms": 4519.0,
+  "lat_p95_ms": 27106.5,
+  "lat_p99_ms": 46660.65000000006,
+  "lat_max_ms": 57155.0,
+  "throughput_mean_ev_s": 3564.4444444444443,
+  "throughput_median_ev_s": 3250.0,
+  "sent_rate_ev_s": 4000.0,
+  "median_first30_ms": 1958.0,
+  "median_last30_ms": 11693.0,
+  "sustainable": false,
+  "dup_seq": 0,
+  "dup_extra": 0,
+  "expected_probes": 8400,
+  "missing_seq": 0,
+  "missing_basis": "sent.csv",
+  "clock_ok": true,
+  "clock_problems": "",
+  "sink_p50_ms": 259.0
+}
