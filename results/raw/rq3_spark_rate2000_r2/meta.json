@@ -1,0 +1,122 @@
+{
+  "run_id": "rq3_spark_rate2000_r2",
+  "rq": "rq3",
+  "engine": "spark",
+  "cfg": "rate2000",
+  "rep": 2,
+  "git": {
+    "commit": "b9e3f029967cd875f62f50b4a69f4b4dc03e267b",
+    "dirty": true
+  },
+  "config": {
+    "version": 1,
+    "kafka": {
+      "bootstrap_internal": "kafka:9092",
+      "bootstrap_host": "localhost:29092",
+      "topic_in": "sensor",
+      "topic_out": "alerts",
+      "partitions": 6,
+      "replication_factor": 1,
+      "starting_offsets": "earliest",
+      "producer": {
+        "linger.ms": 5,
+        "batch.size": 65536,
+        "acks": "1",
+        "compression.type": "none"
+      }
+    },
+    "detector": {
+      "key": [
+        "station_id",
+        "param"
+      ],
+      "warmup": 24,
+      "zscore": {
+        "window": 24,
+        "threshold": 3.0,
+        "min_std": 1e-09
+      },
+      "ewma": {
+        "lambda": 0.3,
+        "L": 3.0,
+        "min_var": 1e-09
+      }
+    },
+    "late": {
+      "tolerance_ms": 7200000
+    },
+    "probe": {
+      "every": 100
+    },
+    "engine": {
+      "parallelism": 4,
+      "checkpoint_interval_ms": 10000,
+      "state_backend": "rocksdb"
+    },
+    "flink": {
+      "consumer_group": "flink-job",
+      "python_execution_mode": "thread",
+      "assign_timestamps": false,
+      "watermark_ms": 10000,
+      "delivery_guarantee": "AT_LEAST_ONCE",
+      "transactional_id_prefix": "p3-flink",
+      "transaction_timeout_ms": 600000,
+      "checkpoint_dir": "file:///checkpoints/flink"
+    },
+    "spark": {
+      "shuffle_partitions": 4,
+      "checkpoint_dir": "/checkpoints/spark"
+    },
+    "producer": {
+      "seed": 42,
+      "synthetic": {
+        "n_stations": 1000,
+        "prefix": "syn_",
+        "param": "pm25",
+        "start_value": 50.0
+      }
+    },
+    "measure": {
+      "warmup_s": 30,
+      "duration_s": 180,
+      "sustain_p99_ms": 1000,
+      "sustain_drift_ratio": 1.5,
+      "drift_window_s": 30,
+      "recovery_window_s": 5,
+      "recovery_factor": 2.0,
+      "recovery_baseline_s": 30
+    },
+    "sota": {
+      "calib_fraction": 0.2,
+      "threshold_quantile": 0.99,
+      "mp": {
+        "m": 24,
+        "normalize": true,
+        "refractory": 24
+      }
+    }
+  },
+  "measure_args": {
+    "cmd": "collect",
+    "run_id": "rq3_spark_rate2000_r2",
+    "bootstrap": "localhost:29092",
+    "max_seconds": 350.0,
+    "idle_timeout": 20.0,
+    "read_committed": true,
+    "docker_stats": true,
+    "kill_ts_ms": null,
+    "no_summary": false,
+    "force": false
+  },
+  "measure_start_ms": 49831214,
+  "measure_start_wall_ms": 1793172587745,
+  "clock": "monotonic",
+  "kill_ts_ms": 49893186,
+  "killed_container": "spark-worker-1",
+  "restart_after_s": 10.0,
+  "measure_end_ms": 50067737,
+  "measure_end_wall_ms": 1793172899235,
+  "n_probe": 4200,
+  "n_alert": 23839,
+  "n_bad": 0
+}

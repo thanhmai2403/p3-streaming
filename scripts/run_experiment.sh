@@ -145,6 +145,7 @@ if [ -z "${MAX_SECONDS:-}" ]; then
   esac
 fi
 
+RUN_START_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)   # để engine.log chỉ chứa log của run này
 log "RUN_ID=$RUN_ID  rq=$RQ engine=$ENGINE config=$CONFIG rate=$RATE dur=${DURATION_S}s -> $OUT"
 
 # ---------------------------------------------------------------- (1) đồng hồ
@@ -338,9 +339,23 @@ log "[7/7] Hủy job, tổng hợp kết quả"
 if [ "$ENGINE" = flink ]; then
   for jid in $(DC exec -T flink-jobmanager flink list -r 2>/dev/null \
                | grep -oE '[0-9a-f]{32}' | sort -u); do
+    # Lưu trạng thái job TRƯỚC khi hủy (REST của JobManager): lịch sử lỗi gốc, số lần restart, checkpoint.
+    # Cần để chẩn đoán run RQ3 không phục hồi (27-28/10: job RUNNING nhưng không ra bản ghi).
+    "$PY" - "$jid" "$OUT" <<'PY' || true
+import json, sys, urllib.request
+jid, out = sys.argv[1], sys.argv[2]
+for name, path in [("job", ""), ("exceptions", "/exceptions?maxExceptions=20"), ("checkpoints", "/checkpoints")]:
+    try:
+        with urllib.request.urlopen(f"http://localhost:8081/jobs/{jid}{path}", timeout=10) as r:
+            data = json.load(r)
+        with open(f"{out}/flink_{name}.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1, ensure_ascii=False)
+    except Exception as ex:  # noqa: BLE001
+        print(f"[run] không lấy được REST {name}: {ex}", file=sys.stderr)
+PY
     DC exec -T flink-jobmanager flink cancel "$jid" >/dev/null 2>&1 || true
   done
-  DC logs --no-color --tail 3000 flink-jobmanager flink-taskmanager-1 flink-taskmanager-2 \
+  DC logs --no-color --since "$RUN_START_UTC" flink-jobmanager flink-taskmanager-1 flink-taskmanager-2 \
     > "$OUT/engine.log" 2>&1 || true
 else
   DC exec -T spark-master sh -c "pkill -f 'spark_job/job.py'" >/dev/null 2>&1 || true

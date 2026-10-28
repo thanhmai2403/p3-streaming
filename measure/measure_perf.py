@@ -222,7 +222,7 @@ def _pct(s, q):
     return float(s.quantile(q)) if len(s) else float("nan")
 
 
-def recovery(lat, kill_ts: int, mc: dict):
+def recovery(lat, kill_ts: int, mc: dict, end_ts: int | None = None):
     """RQ3. Cửa sổ 5 s theo recv_ts_ms. Baseline = p99 của 30 s ngay trước kill.
     Cửa sổ 'xấu' = không nhận được probe nào, hoặc p99 >= 2 x baseline.
     Thời gian phục hồi = từ lúc kill tới HẾT cửa sổ xấu CUỐI CÙNG sau kill (tức là từ đó trở đi
@@ -237,8 +237,11 @@ def recovery(lat, kill_ts: int, mc: dict):
     thr = float(mc["recovery_factor"]) * base_p99
     after = lat[lat.recv_ts_ms >= kill_ts]
     if after.empty:
-        return {"recovery_s": None, "baseline_p99_ms": base_p99, "note": "không có probe sau kill"}
-    last = int(after.recv_ts_ms.max())
+        return {"recovery_s": None, "baseline_p99_ms": base_p99, "recovered": False,
+                "note": "không có probe sau kill"}
+    # Xét tới hết lúc producer gửi xong (end_ts), không chỉ tới probe cuối cùng nhận được: nếu engine
+    # KHÔNG phục hồi thì sau kill không còn probe nào, các cửa sổ trống đó phải tính là 'xấu'.
+    last = max(int(after.recv_ts_ms.max()), int(end_ts or 0) - 1)
     bad_end = None
     rows = []
     for w0 in range(kill_ts, last + 1, win):
@@ -368,7 +371,10 @@ def summarize(run_id: str, cfg: dict, kill_ts_ms: int | None = None) -> dict:
         **clock_check(lat, sent_files),
     }
     if kill_ts_ms:
-        r = recovery(lat, int(kill_ts_ms), mc)
+        sent_end = None
+        if sent_files:
+            sent_end = max(int(pd.read_csv(f).ts_ms.max()) for f in sent_files) + 1000
+        r = recovery(lat, int(kill_ts_ms), mc, sent_end)
         pd.DataFrame(r.pop("windows", [])).to_csv(out / "recovery_windows.csv", index=False)
         summ.update({"kill_ts_ms": int(kill_ts_ms), **r})
     (out / "summary.json").write_text(json.dumps(summ, indent=2), encoding="utf-8")

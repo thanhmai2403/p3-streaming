@@ -56,3 +56,14 @@ assert c["clock_ok"] is False and "emit < ingest" in c["clock_problems"] and "nh
 ok = M.clock_check(lat.iloc[[0, 2]], [])
 assert ok["clock_ok"] is True, ok
 print("CLOCK_CHECK_OK")
+
+# ---- RQ3: engine KHÔNG phục hồi (sau kill chỉ còn vài probe rồi im hẳn) -> recovered=False
+import pandas as pd
+cfg_m = config.load()["measure"]
+K = 100_000
+rows = [(i, t, t + 50) for i, t in enumerate(range(0, K + 3000, 100))]          # tới kill + 3 s rồi tắt
+lat = pd.DataFrame(rows, columns=["seq", "ingest_ts_ms", "recv_ts_ms"]); lat["lat"] = lat.recv_ts_ms - lat.ingest_ts_ms
+r = M.recovery(lat, K, cfg_m, end_ts=K + 150_000)
+assert r["recovered"] is False and r["recovery_s"] is None, {k: v for k, v in r.items() if k != "windows"}
+r2 = M.recovery(lat, K, cfg_m)                   # không có end_ts: hành vi cũ (chỉ tới probe cuối)
+print("RECOVERY_NOT_RECOVERED_OK")
