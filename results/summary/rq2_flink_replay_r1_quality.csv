@@ -1,0 +1,3 @@
+engine,detector,n_alerts,alerts_in_window,n_anomalies,detected,precision,recall,f1,detection_delay_ms_median,detection_delay_ms_mean,detection_delay_ms_p95,detection_delay_n,detection_delay_hours_event_median,has_recv_ts_ms
+flink,ewma,753,153,90,90,0.2032,1.0,0.3377,297.0,332.94444444444446,594.8499999999998,90,0.0,True
+flink,zscore,572,161,90,77,0.2815,0.8556,0.4236,303.0,349.15584415584414,706.0000000000011,77,0.0,True

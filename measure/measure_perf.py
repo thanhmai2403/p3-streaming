@@ -411,7 +411,8 @@ def main(argv=None):
     c.add_argument("--run-id", required=True)
     c.add_argument("--bootstrap", default=cfg["kafka"]["bootstrap_host"])
     c.add_argument("--max-seconds", type=float, default=None, help="dừng sau N giây (mặc định: không giới hạn)")
-    c.add_argument("--idle-timeout", type=float, default=20.0, help="dừng khi N giây không có bản ghi mới")
+    c.add_argument("--idle-timeout", type=float, default=0,
+                   help="dừng khi N giây không có bản ghi mới; 0 = tắt (mặc định, tránh thoát giữa lúc engine restart)")
     c.add_argument("--read-committed", action=argparse.BooleanOptionalAction, default=True,
                    help="RQ3 EXACTLY_ONCE bắt buộc read_committed (mặc định bật)")
     c.add_argument("--docker-stats", action="store_true")

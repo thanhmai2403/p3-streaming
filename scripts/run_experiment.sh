@@ -237,7 +237,7 @@ log "[4/7] measure_perf.py collect --docker-stats (nền, tối đa ${MAX_SECOND
 MEASURE_FORCE=()
 if [ "${FORCE:-0}" = "1" ]; then MEASURE_FORCE=(--force); fi
 "$PY" measure/measure_perf.py collect --run-id "$RUN_ID" --docker-stats \
-  --bootstrap "$HOST_BROKERS" --max-seconds "$MAX_SECONDS" \
+  --bootstrap "$HOST_BROKERS" --max-seconds "$MAX_SECONDS" --idle-timeout 0 \
   ${MEASURE_FORCE[@]+"${MEASURE_FORCE[@]}"} > "$OUT/measure.log" 2>&1 &
 MEASURE_PID=$!
 sleep 2

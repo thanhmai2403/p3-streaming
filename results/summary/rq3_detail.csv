@@ -1,0 +1,10 @@
+run_id,delivery,outage_s,resume_s,peak_lat_s,base_p99_s,rec_w5_s,rec_w15_s,recovery_s,catchup_s,censored,observed_s,restored,ckpt_failed,dup_seq,dup_extra,missing_seq
+rq3_flink_rate2000-eo_r1,EXACTLY_ONCE,26.5,26.5,68.7,11.42,150.0,120.0,120.0,93.5,False,,3.0,0.0,0,0,0
+rq3_flink_rate2000-eo_r3,EXACTLY_ONCE,48.6,48.6,67.7,10.85,155.0,135.0,135.0,86.4,False,,3.0,2.0,0,0,0
+rq3_flink_rate2000-eo_r4,EXACTLY_ONCE,38.9,38.9,44.5,10.53,160.0,60.0,60.0,21.1,False,,3.0,1.0,0,0,0
+rq3_flink_rate2000_r1,AT_LEAST_ONCE,23.0,23.7,47.6,3.04,130.0,135.0,130.0,106.3,False,,1.0,3.0,40,40,0
+rq3_flink_rate2000_r2,AT_LEAST_ONCE,24.8,25.4,57.8,1.54,,,,,True,156.0,3.0,1.0,178,178,0
+rq3_flink_rate2000_r3,AT_LEAST_ONCE,29.0,29.6,111.9,3.44,145.0,150.0,145.0,115.4,False,,4.0,2.0,1786,2015,0
+rq3_spark_rate2000_r1,spark-ckpt,13.0,14.0,20.6,6.36,20.0,30.0,20.0,6.0,False,,,,0,0,0
+rq3_spark_rate2000_r2,spark-ckpt,15.0,15.3,23.9,7.96,25.0,30.0,25.0,9.7,False,,,,0,0,0
+rq3_spark_rate2000_r3,spark-ckpt,8.3,8.3,25.4,9.31,25.0,30.0,25.0,16.7,False,,,,0,0,0

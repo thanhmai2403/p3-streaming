@@ -1,3 +1,4 @@
 run_id,rq,engine,cfg,rep,n_probe_window,lat_p50_ms,lat_p95_ms,lat_p99_ms,lat_max_ms,throughput_mean_ev_s,throughput_median_ev_s,sent_rate_ev_s,median_first30_ms,median_last30_ms,sustainable,dup_seq,dup_extra,expected_probes,missing_seq,missing_basis,clock_ok,clock_problems,sink_p50_ms
 rq0_flink_equiv_r1,rq0,flink,equiv,1,0,,,,,0.0,0.0,,,,False,0,0,100,0,sent.csv,True,,259.5
+rq0_flink_equiv_r2,rq0,flink,equiv,2,0,,,,,0.0,0.0,,,,False,0,0,100,0,sent.csv,True,,270.0
 rq0_spark_equiv_r1,rq0,spark,equiv,1,0,,,,,0.0,0.0,,,,False,0,0,100,0,sent.csv,True,,899.0

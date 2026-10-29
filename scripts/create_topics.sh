@@ -62,13 +62,13 @@ done
 # Lưu ý: KHÔNG viết `[ "$left" = 0 ] && break` — dưới `set -e`, khi điều kiện sai thì cả list trả mã
 # 1 và script THOÁT NGAY (đúng lúc topic chưa kịp biến mất), nên phải dùng if/then/fi.
 left=""
-for _ in $(seq 1 60); do
+for _ in $(seq 1 "${DELETE_WAIT_S:-180}"); do
   left=$( (kt --list 2>/dev/null || echo "__kafka_loi__") | grep -cxE "${T_IN}|${T_OUT}|__kafka_loi__" || true)
   if [ "$left" = "0" ]; then break; fi
   sleep 1
 done
 if [ "${left:-0}" != "0" ]; then
-  echo "LỖI: topic ${T_IN}/${T_OUT} vẫn còn sau 60 s chờ xóa" >&2
+  echo "LỖI: topic ${T_IN}/${T_OUT} vẫn còn sau ${DELETE_WAIT_S:-180} s chờ xóa" >&2
   exit 1
 fi
 

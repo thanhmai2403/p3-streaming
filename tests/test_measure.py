@@ -1,11 +1,25 @@
 """python -m tests.test_measure : Recorder + summarize trên dữ liệu giả, không cần Kafka."""
-import csv, json, random, shutil
+import atexit, csv, json, random, shutil
 from common import config, schema
 from measure import measure_perf as M
 
 cfg = config.load()
 rid = "rq3_flink_testkill_r9"
 out = M.run_dir(rid); shutil.rmtree(out, ignore_errors=True)
+# summarize() ghi 1 dòng vào results/summary/rq3.csv THẬT -> lưu lại để trả nguyên trạng sau test
+SUMM = M.ROOT / "results/summary/rq3.csv"
+SUMM_BAK = SUMM.read_bytes() if SUMM.exists() else None
+
+
+def _restore():                         # chạy cả khi assert hỏng giữa chừng
+    shutil.rmtree(out, ignore_errors=True)
+    if SUMM_BAK is None:
+        SUMM.unlink(missing_ok=True)
+    else:
+        SUMM.write_bytes(SUMM_BAK)
+
+
+atexit.register(_restore)
 rec = M.Recorder(out)
 T0, RATE, DUR = 1_767_600_000_000, 10_000, 210
 KILL = T0 + 90_000
@@ -42,7 +56,6 @@ assert 15 <= s["recovery_s"] <= 30, s["recovery_s"]
 assert s["sustainable"] is False          # p99 trong cửa sổ đo bị kéo lên do kill
 print({k: s[k] for k in ["lat_p50_ms", "lat_p99_ms", "throughput_mean_ev_s", "dup_seq", "missing_seq",
                          "baseline_p99_ms", "recovery_s"]})
-shutil.rmtree(out); (M.ROOT / "results/summary/rq3.csv").unlink()
 print("MEASURE_OK")
 
 # ---- phát hiện lệch/nhảy đồng hồ (tình huống thật đã gặp ở rq1_flink_try5000_r3)

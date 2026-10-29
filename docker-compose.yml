@@ -6,6 +6,9 @@
 
 name: p3
 
+# RQ3 (29/10): restart 2 s + heartbeat mặc định 50 s -> sau khi kill flink-tm1, job restart dồn dập
+# (NoResourceAvailable, gửi task tới TM cũ đã chết) và 5/7 run kẹt ở RUNNING với source không đọc gì.
+# Đổi: chờ 20 s giữa các lần restart (đủ để tm1 khởi động lại) + phát hiện TM chết sau 15 s.
 x-flink: &flink
   build:
     context: .
@@ -30,7 +33,9 @@ x-flink: &flink
       execution.checkpointing.dir: file:///checkpoints/flink
       restart-strategy.type: fixed-delay
       restart-strategy.fixed-delay.attempts: 1000
-      restart-strategy.fixed-delay.delay: 2 s
+      restart-strategy.fixed-delay.delay: 5 s
+      heartbeat.interval: 2000
+      heartbeat.timeout: 15000
       python.executable: /usr/local/bin/python3
       python.client.executable: /usr/local/bin/python3
       python.execution-mode: thread
