@@ -21,3 +21,6 @@ out_smoke/
 # Điểm số thô của SOTA Matrix Profile (~1,6 MB/run, tái tạo bằng sota/matrix_profile.py)
 results/raw/*/scores.csv
 
+# Thư mục do test sinh ra (tests/test_mp.py, tests/test_*.py ghi results/raw/<run>_*test*_r<n>/)
+results/raw/*test*/
+
