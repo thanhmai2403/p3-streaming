@@ -332,15 +332,20 @@ python measure/compare_outputs.py --ref offline --a flink --b spark --input data
 | --- | --- |
 | Độ trễ end-to-end | `recv_ts_ms − ingest_ts_ms` của các bản ghi `probe`. `recv_ts_ms` là mốc lúc consumer đo nhận được. Báo p50, p95, p99 |
 | Thông lượng | Số `probe` nhận được mỗi giây × 100, tính theo `recv_ts_ms`. Cách này đo giống nhau cho cả hai engine, không phụ thuộc consumer lag |
-| Thông lượng bền vững | Mức tải cao nhất thỏa cả hai điều kiện: p99 < 1000 ms, **và** trung vị độ trễ của 30 giây đo cuối ≤ 1,5 lần trung vị của 30 giây đo đầu. Độ trễ tăng dần nghĩa là engine đang bị dồn việc |
-| Thời gian phục hồi (RQ3) | Kill TaskManager/worker ở giây 60. Tính từ lúc kill đến khi p99 của cửa sổ 5 giây về lại dưới 2 lần p99 trước khi kill |
+| Tiêu chí 1 — **theo kịp thông lượng** (`tp_ok`) | Engine xử lý **≥ 95 %** số sự kiện đã gửi trong cửa sổ đo **và** không dồn việc: trung vị độ trễ 10 giây cuối ≤ 1,5 lần trung vị 10 giây đầu của cùng khoảng đang xét. Tiêu chí này trả lời "engine có xử lý kịp lượng dữ liệu vào không", **không** phụ thuộc độ trễ tuyệt đối. Cài trong `scripts/sweep_summary.py` (cột `tp_ok`) |
+| Tiêu chí 2 — **đạt ngưỡng thời gian thực** (`lat_ok`) | `tp_ok` **và** p99 < 1000 ms (`measure.sustain_p99_ms`). Đây mới là mức tải **bền vững** theo nghĩa của báo cáo: giữ được nhịp dữ liệu vào mà cảnh báo vẫn tới trong 1 giây (`scripts/sweep_summary.py`, cột `lat_ok`) |
+| Thời gian mất điện (`outage_s`, RQ3) | Khoảng trống **dài nhất** không nhận được probe nào sau khi kill worker, tính từ lúc kill. Là chỉ số tuyệt đối nên so trực tiếp được Flink với Spark dù độ trễ nền khác nhau (`scripts/rq3_report.py`) |
+| Thời gian xử lý bù (`catchup_s`, RQ3) | Từ lúc nhận lại probe (`resume_s`) đến khi hệ thống về mức nền, tức thời gian xả phần backlog tích trong lúc mất điện: `catchup_s = recovery_s − resume_s` |
+| Thời gian phục hồi (`recovery_s`, RQ3) | Kill TaskManager/worker ở giây 60. Tính từ lúc kill đến khi p99 của **cửa sổ trượt** về lại dưới 2 lần p99 của 30 giây trước kill. Cửa sổ **5 s** cho Flink `AT_LEAST_ONCE` và Spark, **15 s** cho Flink `EXACTLY_ONCE`: sink EO chỉ commit theo checkpoint (10 s/lần) nên probe tới theo đợt 10 s, cửa sổ 5 s xen kẽ cửa sổ rỗng và bị tính "chưa hồi phục" một cách giả tạo. Run nào hết dữ liệu trước khi về ngưỡng thì đánh dấu `censored = True` và báo `observed_s` như một cận dưới |
 | Trùng/mất (RQ3) | Theo `seq` của probe: số `seq` xuất hiện nhiều hơn 1 lần, và số `seq` chia hết cho 100 mà không xuất hiện |
 | Precision | Số alert rơi vào một cửa sổ [`start_ms`, `end_ms` + 1 giờ] của nhãn, chia cho tổng số alert |
 | Recall | Số bất thường có ít nhất một alert trong cửa sổ, chia cho tổng số bất thường |
 | F1 | 2PR / (P + R). Tính riêng cho từng (engine, detector) |
-| Detection delay | `recv_ts_ms` của alert đầu tiên trong cửa sổ, trừ `ingest_ts_ms` của mẫu bất thường đầu tiên. Tính bằng giờ máy, chỉ trên các bất thường đã phát hiện được |
+| Detection delay | Độ trễ **xử lý cảnh báo qua engine**: `recv_ts_ms` (lúc measure nhận alert) − `ingest_ts_ms` **đã ghi trong chính bản ghi alert** (engine copy `ingest_ts_ms` của sự kiện gốc), lấy **alert sớm nhất đo được trong cửa sổ của nhãn**. Đây là định nghĩa **hẹp** nhưng đo được công bằng cho cả hai engine và không cần thêm file; định nghĩa "từ mẫu bất thường đầu tiên của nhãn" cần mốc gửi từng sự kiện (`sent_events.csv`, chưa ghi). Bản offline không có `recv_ts_ms` nên cột này trống; bù lại có `detection_delay_hours_event = (event_time_ms của alert đầu tiên − start_ms)/1 giờ`, tính được cho cả 4 phương pháp (`measure/measure_quality.py`) |
 
-Với dữ liệu trễ, quy tắc ở 6.3 giống hệt nhau ở hai engine, nên **F1 của Flink và Spark phải bằng nhau**. Khác biệt chính phải nằm ở detection delay, do micro-batch hay từng bản ghi. F1 khác nhau thì kiểm tra lại code trước khi viết vào báo cáo.
+Với dữ liệu trễ, quy tắc ở 6.3 giống hệt nhau ở hai engine, nên **F1 của Flink và Spark phải bằng nhau**. Khác biệt chính phải nằm ở detection delay, do micro-batch hay từng bản ghi. F1 khác nhau thì kiểm tra lại code trước khi viết vào báo cáo. Kết quả RQ2 xác nhận đúng như vậy: F1 trùng khít (`zscore` 0,4236 và `ewma` 0,3377 ở **cả** Flink và Spark), còn detection delay trung vị là **1,03 s** (Flink) so với **28,65 s** (Spark).
+
+**Ba cách đọc "bền vững" — đừng trộn số.** (a) `sustainable` trong `results/summary/rq*.csv` do `measure_perf.py` tính: p99 < `sustain_p99_ms` **và** trung vị 30 s cuối ≤ 1,5 lần trung vị 30 s đầu của cửa sổ đo. (b) `tp_ok` / `lat_ok` trong `results/calibration/sweep.csv` do `sweep_summary.py` tính: bỏ 20 s đầu, so trung vị **10 s** đầu với **10 s** cuối, và điều kiện "xử lý ≥ 95 % tốc độ gửi". (c) `recovery_s` trong `results/summary/rq3.csv` là bản cửa sổ 5 s, còn `results/summary/rq3_detail.csv` có thêm `rec_w15_s` cho `EXACTLY_ONCE`. Trích số nào thì ghi rõ nguồn (file + cột) để người đọc kiểm tra lại được; ở RQ2 chỉ dùng `lat_*` và các cột chất lượng, **không** dùng `sustainable`/`sent_rate_ev_s` (xem 10.6).
 
 ### 10.3 SOTA (chạy offline, dùng cùng `labels.csv`)
 
@@ -365,8 +370,11 @@ results/raw/<run_id>/
     docker_stats.csv   # ts_ms, container, cpu_pct, mem_mb
     engine.log         # có số late_dropped
 results/summary/rq1.csv, rq2.csv, rq3.csv   # mỗi dòng một run_id
+results/summary/rq3_detail.csv               # bảng tách outage/catchup/recovery (scripts/rq3_report.py)
+results/summary/rq2_*_quality.csv            # P/R/F1 + detection delay (measure_quality.py, aggregate_quality.py)
+results/calibration/sweep.csv                # dò ngưỡng tải: tp_ok / lat_ok theo từng mức (scripts/sweep_summary.py)
 results/plots/                              # hình cho báo cáo: .png (300 DPI) + .pdf
-                                            # sinh bằng scripts/plot_results.py (mục 10.5)
+                                            # sinh bằng scripts/plot_results.py + scripts/plot_a.py (mục 10.5)
 ```
 
 Không sửa tay file trong `results/raw/`. Thấy lần chạy nào hỏng thì chạy lại với số `r` mới và ghi lý do vào `meta.json`.
@@ -387,6 +395,35 @@ python scripts/plot_results.py --demo          # vẽ bằng dữ liệu giả �
 | `rq3_fault_recovery` | `results/raw/rq3_*/latency.csv` + `meta.json` (`kill_ts_ms`) | p99 theo cửa sổ 5 s quanh thời điểm kill worker ở giây 60 |
 
 Hình nào thiếu dữ liệu thì script **bỏ qua và báo rõ**, không lỗi. Cùng một hàm vẽ dùng cho `--demo` nên thêm hình mới thì thêm cả hai nhánh.
+
+Bộ hình hiện có trong `results/plots/` (đều `.png` 300 DPI + `.pdf`):
+
+| Hình | Script | Nội dung |
+| --- | --- | --- |
+| `rq1_rates` | `scripts/plot_a.py` | 2 ô: (a) thông lượng xử lý vs tốc độ gửi (đường chéo = theo kịp), (b) p99 vs tốc độ gửi, trục log, vạch 1 s. Trung vị, râu = min–max trên 3 lần lặp |
+| `rq1_throughput_latency` | `scripts/plot_results.py` | cùng dữ liệu nhưng vẽ dạng điểm (thông lượng, p99) kèm nhãn cấu hình — dùng khi cần thấy cả `try5000` |
+| `rq2_quality_comparison` | `scripts/plot_results.py` | 8 nhóm cột P/R/F1: `hst`, `mp`, `zscore`, `ewma` (offline) + `flink/zscore`, `flink/ewma`, `spark/zscore`, `spark/ewma` |
+| `rq3_timeline` | `scripts/plot_a.py` | p99 theo cửa sổ **10 s** quanh lúc kill (t = 0) cho 3 nhóm: Spark, Flink `AT_LEAST_ONCE`, Flink `EXACTLY_ONCE`; cửa sổ trống = không nhận được gì |
+| `rq3_breakdown` | `scripts/plot_a.py` | thanh ngang "mất điện + xử lý bù = thời gian phục hồi" (trung vị 3 run, chấm = từng run), đọc `results/summary/rq3_detail.csv` |
+
+`plot_results.py` còn vẽ được `rq3_fault_recovery` (p99 cửa sổ 5 s) nhưng báo cáo **không dùng**: cửa sổ 5 s làm hỏng số của `EXACTLY_ONCE` (xem 10.2), nên hình RQ3 lấy từ `plot_a.py`.
+
+### 10.6 Số nào lấy từ file nào (đọc kết quả)
+
+| Câu hỏi | File | Cột |
+| --- | --- | --- |
+| Ba engine có cùng ngữ nghĩa thuật toán? | `results/summary/rq0.csv`, `results/raw/rq0_*/` | `n_alert` = 759, `missing_seq` = 0; so tập alert bằng `measure/compare_outputs.py` |
+| Engine theo kịp tới mức tải nào? | `results/calibration/sweep.csv`, `results/summary/rq1.csv` | `tp_ok`, `lat_ok`, `throughput_mean_ev_s`, `lat_p99_ms` |
+| Chất lượng phát hiện + giá phải trả về độ trễ? | `results/summary/rq2_offline_quality.csv`, `rq2_flink_replay_quality.csv`, `rq2_spark_replay_quality.csv` | `precision`, `recall`, `f1`, `detection_delay_ms_median` (+ `_std`, `n_reps`) |
+| Chịu lỗi: mất điện bao lâu, mất/trùng bao nhiêu? | `results/summary/rq3_detail.csv` | `outage_s`, `catchup_s`, `recovery_s` (w5/w15), `dup_seq`, `missing_seq`, `censored` |
+
+Cảnh báo khi trích số:
+
+- **RQ2 không dùng `sustainable`, `sent_rate_ev_s`, `median_last30_ms`** trong `results/summary/rq2.csv`: producer gửi xong ở giây ~13 còn cửa sổ đo bắt đầu sau warm-up 30 s ⇒ 30 s cuối rỗng (`NaN`) ⇒ `sustainable = false` vô nghĩa. Thông lượng và bền vững **chỉ lấy từ RQ1**.
+- **`missing_seq` của RQ2 không phải "mất dữ liệu"**: probe rơi đúng vào sự kiện bị quy tắc trễ bỏ đi (`late_dropped`) thì không bao giờ tới sink. Chỉ dùng `missing_seq` cho RQ0/RQ3.
+- **`rq1_flink_try5000_r4` có `clock_ok = false`** (19 probe có `emit < ingest`, `sent.csv` nhảy 31 s) ⇒ không dùng run này; ba run `try5000` còn lại chỉ để minh họa trần, không nằm trong bảng RQ1 (cấu hình không phải `rate<N>`).
+- **RQ3: `recovery_s` trong `rq3.csv` là cửa sổ 5 s** (nhập nhằng với `EXACTLY_ONCE`); số dùng trong báo cáo lấy ở `rq3_detail.csv` (`rec_w5_s` / `rec_w15_s`).
+- `results/raw/` chỉ chứa run đã commit; máy nào thiếu run thì `scripts/rq3_report.py` sẽ tính lại trên phần thiếu — **kiểm tra `git status` trước khi chạy lại** để không ghi đè `results/summary/*.csv` bằng dữ liệu không đầy đủ.
 
 ---
 

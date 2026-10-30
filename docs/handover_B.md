@@ -307,3 +307,59 @@ docker compose exec spark-master ls /checkpoints/spark/<run_id>   # checkpoint R
 
 **A cần biết:** (a) `requirements-b.txt` đã xóa, chỉ dùng `requirements.txt`; (b) tham số MP cần A tinh chỉnh (mục 2.3), không dựa trên nhãn; (c) PR #1 chứa toàn bộ thay đổi; (d) mục 3.8 liệt kê các lỗi môi trường có thể gặp lại.
 
+---
+
+## 7. Cập nhật cuối (30/10/2026) — phần B đã xong, còn đúng 1 việc: quay video
+
+### 7.1 Trạng thái từng hạng mục của B
+
+| Hạng mục | Trạng thái | Bằng chứng |
+| --- | --- | --- |
+| RQ0 — cổng tương đương | **XONG** | `results/summary/rq0.csv` (Flink ×2 + Spark ×1 qua Kafka, 759/759), `results/raw/rq0_*/` |
+| RQ0 — nhiều micro-batch + dữ liệu trễ | **XONG** | `results/raw/rq0_spark_multibatch_late/check.json` (`state_store = rocksdb`) |
+| RQ1 — 4 mức tải × 2 engine × 3 lần | **XONG** | `results/summary/rq1.csv` (24 dòng `rate*`; `try5000` **bị loại**) |
+| RQ2 — chất lượng offline (4 phương pháp) | **XONG** | `results/summary/rq2_offline_quality.csv` |
+| RQ2 — chất lượng + độ trễ qua engine (Flink, Spark ×3) | **XONG** | `rq2_{flink,spark}_replay_quality.csv` |
+| RQ3 — kill worker ở giây 60 (Spark, ALO, EO) | **XONG** | `results/summary/rq3_detail.csv` (9/9 run `missing_seq = 0`) |
+| Hình cho báo cáo | **XONG** | `results/plots/` (6 hình, `.png` 300 DPI + `.pdf`) |
+| Báo cáo phần B | **XONG** | `docs/report_B_draft.md`: §0, §4.1–4.7, §5.1–5.7, §8.1–8.11, §9 |
+| Slide 8–14 + kịch bản video | **XONG** | `docs/slides_B_8_to_14.md` (**mới**) |
+| Video demo Spark 2'30" | **CÒN** | quay theo mục 2 của `docs/slides_B_8_to_14.md` |
+
+### 7.2 `docs/slides_B_8_to_14.md` (mới) — có gì
+
+1. **Đầu tài liệu:** phân công 14 slide / 15 phút (A: 1–7, B: 8–14), quy ước trình bày dùng chung (font,
+   dấu phẩy thập phân, đơn vị, mỗi slide một câu chốt).
+2. **Slide 8 → 14:** mỗi slide có *tiêu đề trên slide*, *số liệu nhấn*, *nội dung hiển thị*, *câu chốt*,
+   *ghi chú thuyết trình (kèm thời lượng)* và *nguồn số* (file CSV + mục báo cáo).
+3. **Video demo Spark:** chuẩn bị môi trường, bảng kịch bản theo giây, lệnh chính xác (A)–(E),
+   3 lỗi hay gặp, kế hoạch dự phòng.
+4. **Checklist trước khi nộp** + **bảng tra nhanh** slide → mục báo cáo → file số → hình.
+
+Quyết định thiết kế: video quay **`rq0`** (`bash scripts/run_experiment.sh rq0 spark demo 1`, ~90 s) chứ
+không quay `rq1` (210 s/run) hay `rq3` (phải chờ kill + phục hồi → dễ quá 2'30"). Lý do: mục tiêu của video là
+chứng minh **quy trình chạy thật**, mà `rq0` đã bao gồm submit job → state trên RocksDB → ghi alert → cổng
+tương đương `TƯƠNG ĐƯƠNG 759/759`. Run demo **không** thuộc bộ bằng chứng nộp bài ⇒ xoá sau khi quay
+(`rm -rf results/raw/rq0_spark_demo_r1`).
+
+### 7.3 Bốn con số chốt (nếu A chỉ đọc được một chỗ)
+
+| Câu hỏi | Trả lời | Ở đâu |
+| --- | --- | --- |
+| Đổi engine có đổi kết quả? | Không: **759/759**, `only = 0/0`, `score_mismatch = 0`, `max_diff` 3,55e-15 (Flink) / 0 (Spark) | `rq0.csv` |
+| Engine nào nhanh hơn? | Không engine nào toàn diện: Flink p99 < 2 s tới 2 000 ev/s nhưng bão hoà 3,5–3,9 k ev/s; Spark giữ 8 377–9 096 ev/s với p50 7–9 s | `rq1.csv` |
+| Chất lượng phát hiện? | z-score F1 **0,4236**, EWMA **0,3377** — **giống nhau** ở Flink và Spark; HST 0,4476, MP 0,0635 | `rq2_*_quality.csv` |
+| Mất một worker thì sao? | 9/9 run **không mất probe**; trùng 40–1 786 (ALO) / 0 (EO); `outage_s` 13,0 (Spark) vs 24,8 / 38,9 (Flink) | `rq3_detail.csv` |
+
+### 7.4 Việc còn lại
+
+> Bản bàn giao riêng cho A (chỉ những gì A cần để ghép bài/nộp): **`docs/handover_A2.md`**.
+
+1. **B:** quay video demo theo `docs/slides_B_8_to_14.md` mục “Video demo Spark”, kiểm tra `git status` sạch.
+2. **B:** xác minh lại mục `[R9]` (ShuffleBench) trong `report_B_draft.md` §Tài liệu tham khảo — nếu không mở
+   được bài gốc để đối chiếu tên/venue thì **bỏ** mục đó và bỏ câu trích trong §8/§9 thay vì để trích dẫn chưa kiểm.
+3. **A:** xác nhận cách **đánh số mục** khi ghép bài — bản nháp hiện nhảy §0 → §4 → §5 → §8 → §9 (A giữ
+   §1–3, §6–7). Nếu A đổi số, cập nhật cột “Mục báo cáo” trong bảng tra nhanh của `slides_B_8_to_14.md`.
+4. **A:** ghép slide 1–7 với 8–14, kiểm tra tổng thời lượng 15 phút, và **một người** chạy lại
+   `python scripts/plot_results.py --check` + `git status` trước khi nộp.
+

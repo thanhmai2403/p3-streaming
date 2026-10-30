@@ -226,3 +226,52 @@
 - Thư mục tạm `checkpoints/_multibatch_check` và `checkpoints/_equiv_check` đã bị xoá (trong `finally` của `run_test_parquet_spark` + cuối test); `checkpoints/` chỉ còn `_smoke` của bài smoke streaming trước đó (đã gitignore).
 
 
+## 2026-10-30 – [B] – `docs/slides_B_8_to_14.md`: nội dung slide 8–14 + kịch bản video demo Spark 2'30"
+
+- Công cụ: Cline (Claude)
+- Yêu cầu chính (rút gọn): B chốt phần trình bày: viết **chữ của 7 slide cuối (8→14)** để dán vào deck 14
+  slide/15 phút, kèm **kịch bản video demo Spark 2–3 phút**; mọi số phải khớp `results/summary/` và bản thảo
+  `docs/report_B_draft.md`, không được phát biểu vượt quá bằng chứng.
+- Đã làm: tạo `docs/slides_B_8_to_14.md` gồm 4 phần.
+  1. **Đầu tài liệu:** bảng phân công deck (A: slide 1–7 / 6'30", B: slide 8–14 / 7'00", video 2'30"); quy ước
+     trình bày dùng chung với A (16:9, font ≥ 24, dấu phẩy thập phân, dấu cách hàng nghìn, đơn vị luôn kèm,
+     mỗi slide **một câu chốt**); quy tắc “nếu A đã đưa RQ0 vào slide 6–7 thì bỏ slide 8”.
+  2. **Slide 8–14:** mỗi slide có *tiêu đề trên slide*, *số liệu nhấn*, *nội dung hiển thị (≤ 6 bullet)*,
+     *câu chốt*, *ghi chú thuyết trình kèm thời lượng* và *nguồn số* (tên file CSV + số mục báo cáo).
+     - **8 (RQ0):** 759/759, `only = 0/0`, `score_mismatch = 0`, `max_diff` 3,55e-15 (Flink) / 0 (Spark),
+       `late_dropped = 544` khớp tham chiếu trên RocksDB.
+     - **9 (RQ1):** bảng min–max 4 mức × 3 lần (p99 Flink 705–1 236 ms @1k → 57 949–136 142 ms @8k; Spark
+       p50 7 263–8 659 ms @8k, thông lượng thực 8 377–9 096 ev/s); cảnh báo **loại** `rq1_flink_try5000_r4`.
+     - **10 (RQ2 chất lượng):** P/R/F1 của z-score và EWMA **giống nhau** ở hai engine (`f1_std = 0`),
+       cộng bảng SOTA offline (HST 0,4476 / z-score 0,4306 / EWMA 0,3398 / MP 0,0635).
+     - **11 (RQ2 độ trễ + SOTA):** delay trung vị 1,03 s (Flink) vs 28,65 s (Spark) + cảnh báo **burst**
+       (`docker-compose.lowmem.yml`, replay trên máy B) ⇒ chỉ là **định hướng**, kết luận hiệu năng lấy RQ1.
+     - **12 (RQ3):** 9/9 `missing_seq = 0`; ALO trùng 40/178/1 786, EO 0; `outage_s` 13,0 (Spark) / 24,8 (ALO)
+       / 38,9 (EO); cảnh báo `recovery_s` **không so trực tiếp** được (nền p99 khác nhau) + run ALO `censored`.
+     - **13 (đe dọa hợp lệ):** bảng 8 dòng, mỗi dòng nêu *đe dọa* → *đã xử lý / phát biểu bị giới hạn*, trỏ §8.1–8.11.
+     - **14 (kết luận):** trả lời RQ0–RQ3 bằng 1 câu mỗi RQ + 3 hướng phát triển.
+  3. **Video demo Spark (2'30"):** chuẩn bị môi trường (Git Bash, `MSYS_NO_PATHCONV=1`,
+     `COMPOSE_FILE="docker-compose.yml:docker-compose.lowmem.yml"`, `SPARK_*_MEMORY`, `check_clock.sh`),
+     bảng kịch bản **theo giây** (7 mốc: check_clock → `run_experiment.sh rq0 spark demo 1` → `compare_outputs.py`
+     → checkpoint RocksDB + đọc 3 alert → `meta.json` → dọn dẹp), 5 khối lệnh chính xác (A)–(E),
+     3 lỗi hay gặp khi quay và kế hoạch dự phòng.
+  4. **Checklist nộp (7 mục)** + **bảng tra nhanh** slide → mục báo cáo → file số → hình.
+- Quyết định khi viết (ghi lại để bảo vệ trước hội đồng):
+  - Video quay **`rq0`** chứ không `rq1`/`rq3`: mục tiêu là chứng minh **quy trình chạy thật** (submit → state
+    trên RocksDB → alert → cổng tương đương), mà `rq0` chỉ ~90 s; `rq1` 210 s/run và `rq3` phải chờ kill +
+    phục hồi nên khó giữ 2'30". Run demo **xoá sau khi quay** vì không thuộc bộ bằng chứng nộp bài.
+  - Không viết “Spark chậm hơn 28 lần”: số 28,65 s / 1,03 s sinh từ **burst replay**, khác điều kiện RQ1.
+  - Không viết “Flink phục hồi nhanh/chậm hơn”: chỉ so `outage_s`, còn `recovery_s` phụ thuộc nền p99.
+  - `try5000` bị loại khỏi bảng RQ1 (đồng hồ nhảy 31 s, 19 probe `emit < ingest`) và nói rõ **tại sao** trên slide.
+- Đã kiểm tra: đọc lại toàn bộ 431 dòng của file (7 heading `## Slide 8`…`## Slide 14` đúng thứ tự, không trùng
+  dấu `---`, mục video nằm trước checklist); đối chiếu từng con số với `results/summary/rq0.csv`, `rq1.csv`,
+  `rq2_offline_quality.csv`, `rq2_{flink,spark}_replay_quality.csv`, `rq3_detail.csv`; đối chiếu `meta.json`
+  (`n_probe = 100`, `n_alert = 759`, `n_bad = 0`) đúng như lời thoại trong video; `dir results\plots` xác nhận
+  đủ 5 hình mà checklist yêu cầu; `findstr "^## " docs\report_B_draft.md` xác nhận mục § mà từng slide trỏ tới.
+- Chưa làm: **quay video** (theo kịch bản trong file); xác minh lại `[R9]` ShuffleBench (chưa mở được bài gốc
+  trong phiên này ⇒ đã ghi vào `handover_A2` mục 3 là phải kiểm hoặc bỏ).
+- Cập nhật tài liệu: `handover_B` **§7 mới** (trạng thái 10 hạng mục, nội dung file slide, 4 con số chốt, việc còn
+  lại); **`docs/handover_A2.md` mới** (bàn giao B→A: 4 câu trả lời RQ, 5 việc A phải làm, 3 điều **không** được
+  phát biểu, 3 cảnh báo phạm vi số liệu).
+
+
